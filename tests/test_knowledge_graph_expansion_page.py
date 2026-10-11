@@ -326,8 +326,11 @@ def test_the_panel_says_why_it_cannot_show_neighbours(
     assert "data-kgraph-expand" not in action
     assert _plain(action) == (
         "Show its neighbours is not offered: it would add 2 visible notes and "
-        "3 edges, and 6 notes would count towards the 5 cap"
+        "3 edges, and 6 notes would count towards the 5 cap — reload to check again"
     )
+    # Eligibility is this render's (D16): the reload asks the server again,
+    # for this very view with the note selected.
+    assert _href(action, "data-kgraph-recheck") == _url("focus=F&selected=B")
 
 
 def test_the_focus_has_neither_action_and_centre_on_this_drops_expand(

@@ -64,7 +64,8 @@
     <p data-kgraph-degree>Degree in this view: {{ node.degree }}</p>
     {#- D16, focus mode only, from the server's eligibility: the focus has
         neither action; an expanded note collapses; any other note shows its
-        neighbours as a plain link, or says why it cannot. -#}
+        neighbours as a plain link, or says why it cannot — and, since that
+        is this render's eligibility, offers the reload that asks again. -#}
     {% set exp = node.expansion %}
     {% if exp is not none and exp.state != "focus" %}
       <p data-kgraph-expansion-action="{{ exp.state }}">
@@ -78,7 +79,7 @@
           {%- if exp.state == "available" -%}
             <a href="{{ knowledge_graph_expand_url(params, node.id) }}" data-kgraph-expand>Show its neighbours</a> — {% if exp.undrawn_nodes %}adds {{ exp.undrawn_nodes }} {{ nodes_word }} and {{ exp.undrawn_edges }} {{ edges_word }}{% else %}adds {{ exp.undrawn_edges }} {{ edges_word }} between notes already drawn{% endif %}; {{ exp.would_count }} notes would count towards the {{ exp.cap }} cap
           {%- else -%}
-            Show its neighbours is not offered: it would add {{ exp.undrawn_nodes }} visible {{ nodes_word }} and {{ exp.undrawn_edges }} {{ edges_word }}, and {{ exp.would_count }} notes would count towards the {{ exp.cap }} cap
+            Show its neighbours is not offered: it would add {{ exp.undrawn_nodes }} visible {{ nodes_word }} and {{ exp.undrawn_edges }} {{ edges_word }}, and {{ exp.would_count }} notes would count towards the {{ exp.cap }} cap — <a href="{{ knowledge_graph_url(params, selected=node.id) }}" data-kgraph-recheck>reload to check again</a>
           {%- endif -%}
         {%- endif -%}
       </p>

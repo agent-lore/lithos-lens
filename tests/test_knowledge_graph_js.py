@@ -24,6 +24,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -76,7 +77,8 @@ const vm = require("vm");
 
 const [scriptPath, cytoscapePath, href, payloadRaw, domRaw, actionsRaw] =
   process.argv.slice(1);
-const dom = JSON.parse(domRaw);
+// The page's DOM, by file: with rendered pages in it, it outgrows argv.
+const dom = JSON.parse(fs.readFileSync(domRaw, "utf8"));
 const actions = JSON.parse(actionsRaw);
 let url = new URL(href, "http://lens.test");
 const assigns = [];
@@ -126,6 +128,13 @@ function el(extra) {
     },
     replaceChildren(...kids) { this.children = kids; },
     appendChild(kid) { this.children.push(kid); return kid; },
+    hasAttribute(name) { return name in this.attributes; },
+    // The page's parts (`dom.parts`) are one element per selector, so a
+    // swap's tree operations are moves in that map (`place`).
+    replaceWith(node) { unplace(this); place(node); },
+    remove() { unplace(this); },
+    before(...nodes) { nodes.forEach(place); },
+    after(...nodes) { nodes.forEach(place); },
   }, extra || {});
 }
 
@@ -212,13 +221,59 @@ const many = {
   "[data-kgraph-depth-count]": depthCounts,
   "[data-kgraph-colour]": colours,
 };
+// One part of a rendered page (`_parts`): its outer and inner HTML, its
+// attributes — and, for the provenance fieldset, its toggles.
+function partElement(selector, part) {
+  const dataset = {};
+  Object.entries(part.attrs).forEach(([name, value]) => {
+    if (name.startsWith("data-")) {
+      dataset[name.slice(5).replace(/-([a-z])/g, (m, c) => c.toUpperCase())] = value;
+    }
+  });
+  const node = el({ key: selector, outerHTML: part.outer, innerHTML: part.inner,
+    textContent: part.inner, attributes: { ...part.attrs }, dataset });
+  if (part.groups) {
+    node.toggles = part.groups.map((group) =>
+      el({ dataset: { kgraphProvenance: group }, value: group }));
+    node.querySelectorAll = () => node.toggles;
+  }
+  return node;
+}
+function place(node) {
+  if (!node || !node.key) return;
+  single[node.key] = node;
+  if (node.toggles) many["[data-kgraph-provenance]"] = node.toggles;
+}
+function unplace(node) {
+  if (!node || single[node.key] !== node) return;
+  delete single[node.key];
+  if (node.toggles) many["[data-kgraph-provenance]"] = [];
+}
+Object.entries(dom.parts || {}).forEach(([selector, part]) => {
+  if (single[selector]) {
+    single[selector].key = selector;
+    single[selector].outerHTML = part.outer;
+    return;
+  }
+  const node = partElement(selector, part);
+  // The page's own fieldset holds the toolbar's toggles.
+  if (node.toggles) node.toggles = provenance;
+  single[selector] = node;
+});
 const documentListeners = {};
 const document = {
   body: el(),
   readyState: "interactive",
   querySelector(selector) { return single[selector] || null; },
-  querySelectorAll(selector) { return many[selector] || []; },
+  querySelectorAll(selector) {
+    if (selector === "[data-kgraph-depth], [data-kgraph-colour]") {
+      return (many["[data-kgraph-depth]"] || [])
+        .concat(many["[data-kgraph-colour]"] || []);
+    }
+    return many[selector] || [];
+  },
   createElement(tag) { return el({ tagName: tag }); },
+  importNode(node) { return node; },
   addEventListener(type, fn) {
     (documentListeners[type] = documentListeners[type] || []).push(fn);
   },
@@ -256,9 +311,41 @@ function htmxEvent(elt, type, detail) {
 // Timers never fire: the headless renderer's animation loop asks for one,
 // and nothing this file does waits on a timer.
 const sandbox = {
-  document, console, URL, URLSearchParams,
+  document, console, URL, URLSearchParams, Promise,
   setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
 };
+// `fetch`, held: each call is recorded and answered only when a `respond`,
+// `status` or `fail` action says so — from `dom.responses`, the pages the
+// route rendered, by the very URL fetched. An abort rejects it at once, as
+// the browser's does; an answer to an aborted request is dropped by the
+// page's own guard, or not at all.
+const fetches = [];
+function fetchStub(url, init) {
+  const index = fetches.length;
+  return new Promise((resolve, reject) => {
+    const call = { url: String(url), init, resolve, reject, aborted: false };
+    fetches.push(call);
+    const signal = init && init.signal;
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        call.aborted = true;
+        reject(new Error("AbortError"));
+      });
+    }
+  });
+}
+// `parseFromString` is handed the response body: a key into `dom.responses`
+// (or `dom.bodies`), whose parts it serves by selector.
+class DOMParser {
+  parseFromString(text) {
+    const parts = text.startsWith("@") ? dom.responses[text.slice(1)].parts : {};
+    const nodes = {};
+    Object.entries(parts).forEach(([selector, part]) => {
+      nodes[selector] = partElement(selector, part);
+    });
+    return { querySelector: (selector) => nodes[selector] || null };
+  }
+}
 const host = single["#kgraph-panel"];
 host.querySelector = (selector) => !host.innerHTML ? null
   : selector === "[data-kgraph-panel-close]" ? closeLink
@@ -299,6 +386,9 @@ sandbox.window = {
   addEventListener(type, fn) {
     (windowListeners[type] = windowListeners[type] || []).push(fn);
   },
+  fetch: dom.noFetch ? undefined : fetchStub,
+  DOMParser,
+  AbortController,
   htmx: {
     ajax(verb, path, context) {
       const xhr = request(path);
@@ -316,7 +406,9 @@ sandbox.window = {
     trigger(elt, type) {
       triggered.push({ type, elt: elt === panelSource ? "canvas" : elt.href });
     },
-    process(elt) { processed.push(pageLinks.indexOf(elt)); },
+    process(elt) {
+      processed.push(elt.key !== undefined ? elt.key : pageLinks.indexOf(elt));
+    },
   },
 };
 const xhrs = [];
@@ -338,10 +430,14 @@ const issued = [];
 const triggered = [];
 const redirects = [];
 const panelSource = single["[data-kgraph-panel-source]"];
+// A request a `htmx:beforeRequest` listener cancelled never leaves.
+const cancelled = [];
 function issue(elt, xhr) {
   xhrs.push(xhr);
   issued.push(elt);
-  htmxEvent(elt, "htmx:beforeRequest", { xhr, elt, target: host });
+  if (!htmxEvent(elt, "htmx:beforeRequest", { xhr, elt, target: host })) {
+    cancelled.push(xhrs.length - 1);
+  }
 }
 function travel(step) {
   cursor += step;
@@ -395,10 +491,74 @@ const byPid = (collection, pid) => collection.filter((e) => e.data("pid") === pi
 const pidsWith = (name) => cy.elements("." + name).map((e) => e.data("pid")).sort();
 
 const marks = [];
+// Every promise the page chains on a fetch's answer settles before the next
+// action: they are microtasks, and this waits a macrotask.
+const settle = () => new Promise((done) => setImmediate(done));
+const status = () => single["[data-kgraph-graph-status]"];
+// What the controls allow, and what the page says, as it stands.
+function controls() {
+  const pill = single["[data-kgraph-refresh-pill]"];
+  const shown = status();
+  const link = shown && shown.children.find((kid) => kid.tagName === "a");
+  return {
+    busy: graph.busy(),
+    request: single["[data-kgraph-canvas]"].dataset.canvasRequest,
+    toggle: single["[data-kgraph-full-toggle]"].disabled,
+    slider: single["[data-kgraph-min-weight]"].disabled,
+    depth: depths.map((r) => r.disabled),
+    colour: colours.map((r) => r.disabled),
+    provenance: (many["[data-kgraph-provenance]"] || []).map((t) => t.disabled),
+    status: shown ? { hidden: shown.hidden,
+      text: shown.children.map((kid) => kid.textContent).join(""),
+      href: link ? link.getAttribute("href") : null } : null,
+    pill: pill ? pill.hidden : null,
+    href: url.href,
+  };
+}
+function answer(index, response) {
+  const call = fetches[index];
+  if (!call) return;
+  call.resolve({ status: response.status, text: () => Promise.resolve(response.body) });
+}
+(async () => {
 for (const action of actions) {
   const [kind, ...rest] = action.split(":");
   const arg = rest.join(":");
-  if (kind === "slider-input" || kind === "slider-change") {
+  await settle();
+  if (kind === "dbltap-node") {
+    // The SECOND tap of a pair: its own `tap`, then the library's `dbltap`
+    // on the same node — whatever the first tap was on.
+    byPid(cy.nodes(), arg).emit("tap");
+    byPid(cy.nodes(), arg).emit("dbltap");
+  } else if (kind === "graph-link" || kind === "graph-link-ctrl") {
+    // A plain (or ctrl-) click on a server-written Show its neighbours,
+    // Collapse or remove link: `attribute|href`.
+    const [attribute, href] = arg.split("|");
+    const link = el({ attributes: { [attribute]: "", href } });
+    link.closest = (selector) => selector.includes(attribute) ? link : null;
+    const event = { target: link, button: 0, ctrlKey: kind === "graph-link-ctrl",
+      defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    (documentListeners.click || []).forEach((fn) => fn(event));
+    marks.push({ prevented: event.defaultPrevented });
+  } else if (kind === "respond" || kind === "status" || kind === "fail") {
+    // Fetch N (default: the latest) answered: `respond:N` with the page the
+    // route rendered for its URL (`respond:N=key` another of
+    // `dom.responses`), `status:N=503` a bare status, `fail:N` a network
+    // error.
+    const [which, value] = arg.split("=");
+    const index = which === "" ? fetches.length - 1 : Number(which);
+    if (!fetches[index]) continue;
+    if (kind === "fail") fetches[index].reject(new TypeError("Failed to fetch"));
+    else if (kind === "status") answer(index, { status: Number(value), body: "" });
+    else {
+      const name = value || new URL(fetches[index].url, url.href).pathname +
+        new URL(fetches[index].url, url.href).search;
+      if (!dom.responses[name]) throw new Error("no response for " + name);
+      answer(index, { status: dom.responses[name].status, body: "@" + name });
+    }
+  } else if (kind === "state") {
+    marks.push(controls());
+  } else if (kind === "slider-input" || kind === "slider-change") {
     const slider = single["[data-kgraph-min-weight]"];
     slider.value = arg;
     slider.fire(kind === "slider-input" ? "input" : "change");
@@ -500,6 +660,7 @@ for (const action of actions) {
     throw new Error("unknown action " + action);
   }
 }
+await settle();
 
 const style = (e, name) => e.pstyle(name).strValue;
 const canvas = single["[data-kgraph-canvas]"];
@@ -594,7 +755,27 @@ console.log(JSON.stringify({
     edges: Object.values(graph.edgeColours).concat([graph.resolvedColour]),
     nodes: graph.nodePalette.concat([graph.nodeNeutral]),
   },
+  fetches: fetches.map((call) => call.url),
+  fetchAborted: fetches
+    .map((call, index) => call.aborted ? index : -1)
+    .filter((i) => i >= 0),
+  cancelled,
+  render: host.dataset.kgraphRender,
+  // Each part of the page's text as it stands: its outer HTML, or none.
+  text: Object.fromEntries((dom.partSelectors || []).map((selector) =>
+    [selector, single[selector] ? single[selector].outerHTML || null : null])),
+  payloadText: single["[data-knowledge-graph-payload]"].textContent,
+  exported: graph.payload.nodes.map((n) => n.id),
+  marked: Object.fromEntries(cy.nodes().map((n) => [n.data("pid"),
+    { classes: ["adds-notes", "adds-edges"].filter((c) => n.hasClass(c)),
+      badge: n.pstyle("background-image").strValue }])),
+  keyMarkText: single["[data-kgraph-key-marks]"].children.map(textOf),
+  controls: controls(),
 }));
+})().catch((error) => {
+  console.error(error && error.stack || error);
+  process.exit(1);
+});
 """
 )
 
@@ -616,6 +797,117 @@ setImmediate(() => {
 });
 """
 )
+
+
+#: The parts of a rendered page a swap replaces (D16), and the payload and
+#: panel host it reads them with: the selector the script asks for, and the
+#: attribute (and value) that marks the element.
+PART_SELECTORS: dict[str, tuple[str, str | None]] = {
+    "[data-kgraph-scope]": ("data-kgraph-scope", None),
+    "#kgraph-panel": ("id", "kgraph-panel"),
+    "[data-kgraph-legend]": ("data-kgraph-legend", None),
+    "[data-kgraph-focus]": ("data-kgraph-focus", None),
+    "[data-kgraph-edges]": ("data-kgraph-edges", None),
+    "[data-kgraph-layers]": ("data-kgraph-layers", None),
+    "[data-kgraph-missing]": ("data-kgraph-missing", None),
+    "[data-kgraph-hidden]": ("data-kgraph-hidden", None),
+    "[data-kgraph-unresolved-count]": ("data-kgraph-unresolved-count", None),
+    "[data-kgraph-provenance-group]": ("data-kgraph-provenance-group", None),
+    "[data-knowledge-graph-payload]": ("data-knowledge-graph-payload", None),
+    "[data-kgraph-graph-status]": ("data-kgraph-graph-status", None),
+}
+#: The parts that are the page's text — everything a swap replaces but the
+#: payload, the panel host (its contents are compared as `panel`) and the
+#: script's own status line.
+TEXT_SELECTORS = [
+    selector
+    for selector in PART_SELECTORS
+    if selector
+    not in (
+        "#kgraph-panel",
+        "[data-knowledge-graph-payload]",
+        "[data-kgraph-graph-status]",
+    )
+]
+_VOID = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "source",
+    "track",
+    "wbr",
+}
+
+
+class _Spans(HTMLParser):
+    """Each part's outer and inner HTML and attributes, by its offsets in
+    the page as the route rendered it."""
+
+    def __init__(self, html: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self.html = html
+        self.lines = [0]
+        for line in html.splitlines(keepends=True):
+            self.lines.append(self.lines[-1] + len(line))
+        self.stack: list[tuple[str, int, int, dict[str, str], list[str]]] = []
+        self.parts: dict[str, dict[str, Any]] = {}
+
+    def _at(self) -> int:
+        line, column = self.getpos()
+        return self.lines[line - 1] + column
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        start = self._at()
+        text = self.get_starttag_text() or ""
+        named = {k: v or "" for k, v in attrs}
+        wanted = [
+            selector
+            for selector, (name, value) in PART_SELECTORS.items()
+            if name in named and (value is None or named[name] == value)
+        ]
+        if tag in _VOID:
+            for selector in wanted:
+                self.parts.setdefault(
+                    selector, {"outer": text, "inner": "", "attrs": named}
+                )
+            return
+        self.stack.append((tag, start, start + len(text), named, wanted))
+
+    def handle_endtag(self, tag: str) -> None:
+        inner_end = self._at()
+        end = self.html.index(">", inner_end) + 1
+        while self.stack:
+            open_tag, start, inner_start, named, wanted = self.stack.pop()
+            for selector in wanted:
+                self.parts.setdefault(
+                    selector,
+                    {
+                        "outer": self.html[start:end],
+                        "inner": self.html[inner_start:inner_end],
+                        "attrs": named,
+                    },
+                )
+            if open_tag == tag:
+                break
+
+
+def _parts(html: str) -> dict[str, dict[str, Any]]:
+    spans = _Spans(html)
+    spans.feed(html)
+    parts = spans.parts
+    group = parts.get("[data-kgraph-provenance-group]")
+    if group is not None:
+        group["groups"] = re.findall(
+            r'data-kgraph-provenance="([^"]+)"', group["inner"]
+        )
+    return parts
 
 
 @dataclass(frozen=True)
@@ -650,6 +942,8 @@ def _page(client: TestClient, url: str) -> Page:
     pill = re.search(r'data-kgraph-refresh-pill href="([^"]*)" hidden', html)
     if pill is not None:
         dom["pillHref"] = html_lib.unescape(pill.group(1))
+    dom["parts"] = _parts(html)
+    dom["partSelectors"] = list(PART_SELECTORS)
     return Page(url, html, json.loads(match.group(1)), dom)
 
 
@@ -677,24 +971,27 @@ def _run(
     harness: str = HARNESS,
 ) -> dict:
     assert NODE is not None
-    result = subprocess.run(
-        [
-            NODE,
-            "-e",
-            harness,
-            "--",
-            str(KNOWLEDGE_GRAPH_JS),
-            str(CYTOSCAPE_JS),
-            page.url,
-            json.dumps(payload or page.payload),
-            json.dumps({**page.dom, **(dom or {})}),
-            json.dumps(list(actions)),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
+    with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as dom_file:
+        json.dump({**page.dom, **(dom or {})}, dom_file)
+        dom_file.flush()
+        result = subprocess.run(
+            [
+                NODE,
+                "-e",
+                harness,
+                "--",
+                str(KNOWLEDGE_GRAPH_JS),
+                str(CYTOSCAPE_JS),
+                page.url,
+                json.dumps(payload or page.payload),
+                dom_file.name,
+                json.dumps(list(actions)),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
     # The minified bundle's own line is in a stack trace's excerpt: left out.
     assert result.returncode == 0, "\n".join(
         line for line in result.stderr.splitlines() if len(line) < 300

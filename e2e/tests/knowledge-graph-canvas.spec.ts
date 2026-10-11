@@ -24,6 +24,10 @@ const SUPPORTS = "edge_4c1e9a7b20d3";
 
 test.use({ viewport: { width: 1440, height: 1000 } });
 
+//: Longer than Cytoscape's `multiClickDebounceTime` (250ms): two clicks this
+//: far apart are two single clicks, not a double click.
+const DOUBLE_CLICK_MS = 400;
+
 // Every history push, with whether the panel host held a fragment at that
 // moment — the order D10 requires is swap first, then push.
 test.beforeEach(async ({ page }) => {
@@ -426,6 +430,9 @@ test("re-selecting a node then Back with another request in flight keeps the Bac
   await canvasReady(page);
   await clickNode(page, CAPACITY);
   await nodePanel(page, CAPACITY);
+  // Two clicks inside Cytoscape's double-click window are a double click,
+  // which expands the note (D16): a re-selection is a second single click.
+  await page.waitForTimeout(DOUBLE_CLICK_MS);
   await clickNode(page, CAPACITY);
   await nodePanel(page, CAPACITY);
   expect((await pushes(page)).map((p) => p.url)).toEqual([
@@ -679,4 +686,278 @@ test("the pan hint follows the view as the operator zooms", async ({ page }) => 
   // A pan that brings it all back into view (after fitting again) hides it.
   await page.evaluate(() => (window as any).LithosLensKnowledgeGraph.cy.fit(undefined, 10));
   await expect(hint).toBeHidden();
+});
+
+// ── Expansion in place (K2 S9, D16) ────────────────────────────────────
+//
+// On the demo set at `min_weight=0.7` around the rollback note: the plan's
+// neighbours add the capacity and legacy notes; then the capacity note's
+// add only the capacity–legacy edge. The Node harness
+// (`tests/test_knowledge_graph_expansion_canvas.py`) pins the URLs, the
+// diff and the races; this is the same swap against the real server, a
+// real pointer, the keyboard and touch, with titles measured.
+
+const EXPANSION_BASE = `/knowledge/graph?focus=${ROLLBACK}&min_weight=0.7`;
+
+/** The view on screen once no expansion or collapse is out. */
+async function shownView(page: Page) {
+  await page.waitForFunction(() => {
+    const graph = (window as any).LithosLensKnowledgeGraph;
+    return graph && !graph.busy();
+  });
+  return page.evaluate(() => {
+    const graph = (window as any).LithosLensKnowledgeGraph;
+    return {
+      nodes: graph.payload.nodes.map((n: any) => n.id).sort(),
+      edges: graph.payload.edges.length,
+      drawn: graph.cy.nodes().length,
+      expansions: graph.payload.expansions.map((s: any) => [s.id, s.state]),
+      positions: Object.fromEntries(
+        graph.cy.nodes().map((n: any) => [n.data("pid"), n.position()]),
+      ),
+    };
+  });
+}
+
+/** Waits for the view to draw `count` notes and `edges` edges. */
+async function viewOf(page: Page, count: number, edges?: number) {
+  await page.waitForFunction(
+    ([n, e]) => {
+      const graph = (window as any).LithosLensKnowledgeGraph;
+      return graph && !graph.busy() && graph.payload.nodes.length === n &&
+        (e === null || graph.payload.edges.length === e);
+    },
+    [count, edges ?? null] as const,
+  );
+  return shownView(page);
+}
+
+/** Every page fetch of the graph route the script makes (not navigations). */
+function viewFetches(page: Page) {
+  const urls: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/knowledge/graph" && request.resourceType() === "fetch") {
+      urls.push(url.pathname + url.search);
+    }
+  });
+  return urls;
+}
+
+async function nodePoint(page: Page, id: string) {
+  await page.locator("[data-kgraph-canvas]").scrollIntoViewIfNeeded();
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
+  return page.evaluate((pid) => {
+    const cy = (window as any).LithosLensKnowledgeGraph.cy;
+    const node = cy.nodes().filter((n: any) => n.data("pid") === pid)[0];
+    const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+    const at = node.renderedPosition();
+    return { x: box.left + at.x, y: box.top + at.y };
+  }, id);
+}
+
+test("a double click expands a note in place: one fetch, pushed after the swap, nothing moved, every label clear", async ({
+  page,
+}) => {
+  const fetched = viewFetches(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(EXPANSION_BASE);
+  await canvasReady(page);
+  await markDocument(page);
+  const before = await shownView(page);
+  expect(before.nodes).toEqual([PLAN, ROLLBACK].sort());
+  const plan = await page.evaluate(
+    (pid) => (window as any).LithosLensKnowledgeGraph.payload.nodes.find((n: any) => n.id === pid),
+    PLAN,
+  );
+  expect([plan.expansion.state, plan.undrawn_nodes]).toEqual(["available", 2]);
+
+  const at = await nodePoint(page, PLAN);
+  await page.mouse.dblclick(at.x, at.y);
+  const after = await viewOf(page, 4);
+
+  expect(query(page)).toEqual({ focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN });
+  expect(await sameDocument(page)).toBe(true);
+  expect(fetched).toEqual([
+    `/knowledge/graph?focus=${ROLLBACK}&expand=${PLAN}&min_weight=0.7&selected=${PLAN}`,
+  ]);
+  const last = (await pushes(page)).at(-1)!;
+  expect(last.url).toBe(fetched[0]);
+  expect(last.panel).toContain("data-kgraph-collapse");
+  expect(after.nodes).toEqual([CAPACITY, LEGACY, PLAN, ROLLBACK].sort());
+  expect(after.drawn).toBe(4);
+  expect(after.expansions).toEqual([[PLAN, "applied"]]);
+  for (const pid of [PLAN, ROLLBACK]) expect(after.positions[pid]).toEqual(before.positions[pid]);
+  // The text is the expanded view's: the scope line and the relations.
+  await expect(page.locator(`[data-kgraph-scope] [data-kgraph-expanded="${PLAN}"]`)).toBeVisible();
+  await expect(page.locator(`[data-kgraph-edges] [data-kgraph-node="${CAPACITY}"]`).first()).toBeVisible();
+  await expect(page.locator(`#kgraph-panel [data-kgraph-panel-id="${PLAN}"]`)).toBeVisible();
+  // Placed by measured titles: no label over another or under a note.
+  await page.evaluate(() =>
+    (window as any).LithosLensKnowledgeGraph.cy.nodes().addClass("lit"),
+  );
+  await knowledgeCanvasLabelsAreReadable(page);
+});
+
+test("the keyboard expands, expands edge-only and collapses through the panel's links", async ({
+  page,
+}) => {
+  const fetched = viewFetches(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${EXPANSION_BASE}&selected=${PLAN}`);
+  await canvasReady(page);
+  const base = await shownView(page);
+
+  await page.locator("#kgraph-panel [data-kgraph-expand]").focus();
+  await page.keyboard.press("Enter");
+  const one = await viewOf(page, 4, 7);
+  // The link went with the old panel: the focus is on the new one's heading.
+  await expect(page.locator("#kgraph-panel [data-kgraph-panel-heading]")).toBeFocused();
+
+  // The capacity note now adds only an edge: its mark and its panel say so.
+  const capacity = await page.evaluate(
+    (pid) => (window as any).LithosLensKnowledgeGraph.payload.nodes.find((n: any) => n.id === pid),
+    CAPACITY,
+  );
+  expect([capacity.undrawn_nodes, capacity.undrawn_edges]).toEqual([0, 1]);
+  expect(
+    await page.evaluate(
+      (pid) =>
+        (window as any).LithosLensKnowledgeGraph.cy
+          .nodes()
+          .filter((n: any) => n.data("pid") === pid)[0]
+          .hasClass("adds-edges"),
+      CAPACITY,
+    ),
+  ).toBe(true);
+  await expect(page.locator('[data-kgraph-key-marks] [data-key-mark="adds-edges"]')).toHaveCount(1);
+  await page.waitForTimeout(DOUBLE_CLICK_MS);
+  await clickNode(page, CAPACITY);
+  await nodePanel(page, CAPACITY);
+  await expect(page.locator("#kgraph-panel [data-kgraph-expansion-action]")).toContainText(
+    "between notes already drawn",
+  );
+  await page.locator("#kgraph-panel [data-kgraph-expand]").focus();
+  await page.keyboard.press("Enter");
+  const two = await viewOf(page, 4, 8);
+  expect(two.positions).toEqual(one.positions);
+
+  // Collapse the plan from the scope line: its dependant goes with it.
+  await page.locator(`[data-kgraph-scope] [data-kgraph-expansion-remove="${PLAN}"]`).focus();
+  await page.keyboard.press("Enter");
+  const back = await viewOf(page, 2);
+  expect(back.positions).toEqual(base.positions);
+  expect(query(page)).toEqual({ focus: ROLLBACK, min_weight: "0.7" });
+  expect(fetched.length).toBe(3);
+});
+
+test.describe("on a touch screen", () => {
+  test.use({ hasTouch: true });
+
+  test("tapping Show its neighbours expands in place", async ({ page }) => {
+    const fetched = viewFetches(page);
+    await page.goto(`${EXPANSION_BASE}&selected=${PLAN}`);
+    await canvasReady(page);
+    await markDocument(page);
+
+    await page.locator("#kgraph-panel [data-kgraph-expand]").tap();
+    const view = await viewOf(page, 4);
+
+    expect(view.expansions).toEqual([[PLAN, "applied"]]);
+    expect(await sameDocument(page)).toBe(true);
+    expect(fetched).toHaveLength(1);
+  });
+});
+
+/** Hold the next expansion fetch of the page route, until released. */
+async function holdView(page: Page) {
+  let intercepted!: () => void;
+  let release!: () => void;
+  const seen = new Promise<void>((resolve) => (intercepted = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let handled: Promise<void> = Promise.resolve();
+  await page.route(
+    (url) => url.pathname === "/knowledge/graph" && url.search.includes("expand="),
+    (route) => {
+      if (route.request().resourceType() !== "fetch") return route.continue();
+      handled = (async () => {
+        intercepted();
+        await released;
+        await route.continue().catch(() => undefined);
+      })();
+      return handled;
+    },
+    { times: 1 },
+  );
+  return { seen, release: () => release(), handled: () => handled };
+}
+
+test("while an expansion is out the controls are disabled and a click opens nothing; failure gives them back", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${EXPANSION_BASE}&selected=${PLAN}`);
+  await canvasReady(page);
+  const held = await holdView(page);
+
+  await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+  await held.seen;
+  await expect(page.locator("[data-kgraph-full-toggle]")).toBeDisabled();
+  await expect(page.locator("[data-kgraph-min-weight]")).toBeDisabled();
+  await expect(page.locator('[data-kgraph-depth][value="2"]')).toBeDisabled();
+  await page.waitForTimeout(DOUBLE_CLICK_MS);
+  await clickNode(page, ROLLBACK);
+  // Search still works meanwhile.
+  await page.locator("[data-kgraph-search]").fill("plan");
+  await expect(page.locator("[data-kgraph-search-count]")).toHaveText(/1 match/);
+  expect(query(page)).toEqual({ focus: ROLLBACK, min_weight: "0.7", selected: PLAN });
+  await nodePanel(page, PLAN);
+  held.release();
+  await held.handled();
+  await viewOf(page, 4);
+  await expect(page.locator("[data-kgraph-full-toggle]")).toBeEnabled();
+
+  // A failed answer: nothing changes, the reason and a plain link are shown.
+  await page.route(
+    (url) => url.pathname === "/knowledge/graph" && url.search.includes(`expand=${CAPACITY}`),
+    (route) => route.fulfill({ status: 503, body: "busy" }),
+    { times: 1 },
+  );
+  const before = await shownView(page);
+  await page.waitForTimeout(DOUBLE_CLICK_MS);
+  await clickNode(page, CAPACITY);
+  await nodePanel(page, CAPACITY);
+  await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+  const status = page.locator("[data-kgraph-graph-status]");
+  await expect(status).toBeVisible();
+  await expect(status).toContainText("The graph was not changed");
+  await expect(status.locator("a")).toHaveAttribute("href", new RegExp(`expand=${CAPACITY}`));
+  expect((await shownView(page)).positions).toEqual(before.positions);
+  expect(query(page).selected).toBe(CAPACITY);
+  await expect(page.locator("[data-kgraph-full-toggle]")).toBeEnabled();
+});
+
+test("Back during an expansion reloads that entry and the late answer changes nothing", async ({
+  page,
+}) => {
+  await page.goto(EXPANSION_BASE);
+  await canvasReady(page);
+  await clickNode(page, PLAN);
+  await nodePanel(page, PLAN);
+  const held = await holdView(page);
+
+  await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+  await held.seen;
+  await page.goBack();
+  await expect.poll(() => query(page)).toEqual({ focus: ROLLBACK, min_weight: "0.7" });
+  await canvasReady(page);
+  held.release();
+  await held.handled();
+
+  await expect.poll(() => query(page)).toEqual({ focus: ROLLBACK, min_weight: "0.7" });
+  const view = await shownView(page);
+  expect(view.nodes).toEqual([PLAN, ROLLBACK].sort());
+  expect(await pushes(page)).toEqual([]);
 });
