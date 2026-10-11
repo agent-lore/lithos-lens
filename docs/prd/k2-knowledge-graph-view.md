@@ -606,9 +606,12 @@ existing per-render cap.
   `graph_focus_max_nodes` is refused **on its own**, adding no edges or
   nodes: "expanding *B* would add 41 visible notes; 263 notes would count
   towards the 250 cap". The rest of the view is drawn. The refusal sits
-  under "Not shown" with links to remove the
-  expansion or raise the minimum weight when a computed remedy fits and
-  still reaches the expansion. Otherwise say no weight remedy fits.
+  under "Not shown" with a link that removes the expansion. It offers
+  **no weight remedy**. A remedy that still reaches the expansion would
+  mean re-running the base and every earlier expansion at each candidate
+  weight, so it is deferred (K2-S8 brief review S1, accepted 2026-10-10).
+  The weight control, and the base view's depth and weight remedies,
+  remain the ways to widen the view.
   Later expansions are still tried and refused separately if they do not fit.
 - **Base view over the cap.** A base view (focus and depth) over the cap is
   refused as in D3, and expansions do not change that.
@@ -936,8 +939,9 @@ reverted**; the architecture budgets hold; no coverage percentage.
   promotion to typed endpoints. Assert visual additions separately from
   cap counts and server eligibility at the cap boundary; a refused step
   changes neither set. Preserve `edge=` / `pin=` exemptions. An over-cap
-  base still spends no related/facts read. Weight remedies must keep the
-  requested expansion reached and within the cap.
+  base still spends no related/facts read. A refused expansion offers no
+  weight remedy (deferred, K2-S8 S1). The over-cap base keeps its depth
+  and weight remedies.
 - **Expansion page (TestClient, amendment)**: an expansion's edges are in
   both the text sections and the payload, and they agree; the scope line
   names the applied expansions with remove links; "Not shown" lists the
