@@ -1101,6 +1101,11 @@
     let sideOf = new Map();
     //: The height the overlays leave, below zero where they overlap.
     let band = 0;
+    //: The width they leave, likewise.
+    let span = 0;
+    //: The key's side when the selection needs the width beside a drawer:
+    //: the bottom, giving back the left (else the cheaper of the two).
+    let keyAnchor = null;
 
     function heightOf(elt) {
       return elt && typeof elt.getBoundingClientRect === "function"
@@ -1133,7 +1138,9 @@
           if (x2 <= x1 || y2 <= y1) return;
           // Only a side it is anchored to: the toolbar the top, the key the
           // bottom or (narrow) the left, the panel the right or the bottom.
-          const anchored = elt === toolbar ? ["top"] : elt === key ? ["bottom", "left"] : ["right", "bottom"];
+          const anchored = elt === toolbar
+            ? ["top"]
+            : elt === key ? (keyAnchor ? [keyAnchor] : ["bottom", "left"]) : ["right", "bottom"];
           const sides = [
             ["top", y2, y2 * width],
             ["bottom", height - y1, (height - y1) * width],
@@ -1147,6 +1154,7 @@
       }
       usable = { x1: inset.left, y1: inset.top, x2: width - inset.right, y2: height - inset.bottom };
       band = usable.y2 - usable.y1;
+      span = usable.x2 - usable.x1;
       // Overlays that meet leave no area: an empty one where they meet, so
       // what is short is measured, not hidden.
       if (usable.x2 < usable.x1) usable.x1 = usable.x2 = (usable.x1 + usable.x2) / 2;
@@ -1178,6 +1186,8 @@
     ];
     //: The least an open sheet keeps: its first lines.
     const SHEET_FLOOR = 40;
+    //: The narrowest a drawer gives way to (18rem): still a readable panel.
+    const DRAWER_FLOOR = 288;
     //: Kept clear around the selected note, where there is room for it.
     const ROOM_PADDING = 4;
 
@@ -1203,11 +1213,30 @@
 
     function makeRoom(zoom) {
       const capped = stage && stage.style && typeof stage.style.removeProperty === "function";
-      if (capped) CAPS.forEach(function (cap) { stage.style.removeProperty(cap[1]); });
+      if (capped) {
+        CAPS.forEach(function (cap) { stage.style.removeProperty(cap[1]); });
+        stage.style.removeProperty("--kgraph-drawer-cap");
+      }
+      keyAnchor = null;
       measureOverlays();
       const selection = urlSelection();
       if (!capped || !fullPage || !selection.length) return;
-      let short = selection.boundingBox().h * zoom + 2 * ROOM_PADDING - band;
+      const model = selection.boundingBox();
+      // Short of width (beside a drawer): the key is counted off the
+      // bottom, where it also lies, so the band is all the width the drawer
+      // leaves; then the drawer narrows, to no less than DRAWER_FLOOR.
+      const wide = model.w * zoom + 2 * ROOM_PADDING;
+      if (sideOf.get(key) === "left" && wide > span) {
+        keyAnchor = "bottom";
+        measureOverlays();
+      }
+      if (sideOf.get(host) === "right" && wide > span) {
+        const drawer = host.getBoundingClientRect().width;
+        stage.style.setProperty(
+          "--kgraph-drawer-cap", Math.max(DRAWER_FLOOR, drawer - (wide - span)) + "px");
+        measureOverlays();
+      }
+      let short = model.h * zoom + 2 * ROOM_PADDING - band;
       if (short <= 0) return;
       // Every overlay across the band is held at its height (or cut), so
       // none grows into the room another gives.
@@ -1409,15 +1438,26 @@
     // selection, else its focus, and the pan hint says the rest is a drag
     // away. A refit or a pan the operator caused moves smoothly unless they
     // prefer reduced motion; a load does not. No node moves.
-    function moveTo(viewport, animate) {
+    //: The viewport a refit or pan is moving to, while it moves, and
+    //: whether it is a fit: what a change of geometry meanwhile builds on,
+    //: rather than the frame it happens to interrupt.
+    let inFlight = null;
+
+    function moveTo(viewport, animate, fit) {
       cy.stop(true, false);
       if (animate && !reducedMotion()) {
+        const flight = { target: viewport, fit: !!fit };
+        inFlight = flight;
         container.dataset.canvasMotion = "moving";
         cy.animate({ zoom: viewport.zoom, pan: viewport.pan }, {
           duration: MOTION_MS,
-          complete: function () { container.dataset.canvasMotion = "still"; }
+          complete: function () {
+            if (inFlight === flight) inFlight = null;
+            container.dataset.canvasMotion = "still";
+          }
         });
       } else {
+        inFlight = null;
         cy.viewport(viewport);
         container.dataset.canvasMotion = "still";
       }
@@ -1447,31 +1487,24 @@
       moveTo({
         zoom: zoom,
         pan: { x: middle.x - zoom * centre.x, y: middle.y - zoom * centre.y }
-      }, animate);
+      }, animate, true);
     }
 
     // The selection kept in the usable area whenever that area moves — a
     // drawer or sheet opening over it, a disclosure, the pill, the window:
     // room made for it at the zoom it is, then a pan, with as much of
-    // FIT_PADDING as there is room for. Only when the overlays cannot give
-    // way enough is the zoom lowered — about the selection, never below
-    // MIN_READABLE_ZOOM.
+    // FIT_PADDING as there is room for — from where a move in flight is
+    // going, not the frame it has reached. A pan alone: the zoom is the
+    // operator's (D12), so a note drawn larger than the canvas less every
+    // overlay's floor is centred in what there is.
     function revealSelection(animate) {
       const selection = urlSelection();
-      makeRoom(cy.zoom());
+      const base = inFlight ? inFlight.target : { zoom: cy.zoom(), pan: cy.pan() };
+      makeRoom(base.zoom);
       if (!fullPage || !selection.length) return;
       const model = selection.boundingBox();
-      const was = cy.zoom();
-      const fits = Math.min(
-        (usable.y2 - usable.y1 - 2 * ROOM_PADDING) / model.h,
-        (usable.x2 - usable.x1 - 2 * ROOM_PADDING) / model.w
-      );
-      const zoom = was > fits ? Math.max(MIN_READABLE_ZOOM, Math.min(was, fits)) : was;
-      // The selection's centre stays where it is drawn while the zoom changes.
-      const pan = cy.pan();
-      const centre = centreOf(model);
-      const at = { x: was * centre.x + pan.x, y: was * centre.y + pan.y };
-      const next = { x: at.x - zoom * centre.x, y: at.y - zoom * centre.y };
+      const zoom = base.zoom;
+      const next = base.pan;
       const shift = function (low, high, from, to) {
         if (high - low > to - from) return (from + to) / 2 - (low + high) / 2;
         const pad = Math.min(FIT_PADDING, (to - from - (high - low)) / 2);
@@ -1481,16 +1514,20 @@
       };
       const dx = shift(zoom * model.x1 + next.x, zoom * model.x2 + next.x, usable.x1, usable.x2);
       const dy = shift(zoom * model.y1 + next.y, zoom * model.y2 + next.y, usable.y1, usable.y2);
-      if (zoom === was && Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+      // Already clear (or going there): a move in flight runs on.
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
       moveTo({ zoom: zoom, pan: { x: next.x + dx, y: next.y + dy } }, animate);
     }
 
     // Anything over the canvas, or the canvas itself, changed size: the
     // room re-made from the overlays' own sizes (a held one would hide a
     // disclosure or the pill) and the selection kept in what is left.
+    // A fit still in flight is fitted again to the new geometry, not
+    // stopped where it has got to.
     function geometryChanged(animate) {
       cy.resize();
-      revealSelection(animate);
+      if (inFlight && inFlight.fit) fitView(animate);
+      else revealSelection(animate);
       showPanHint();
     }
 
@@ -1584,7 +1621,8 @@
 
     panelMoved = function (opened) {
       if (!opened) light(null);
-      // Opened, the selection is kept clear; closed, room given back.
+      // Opened, the selection is kept clear by a pan alone (D12); closed,
+      // room given back.
       revealSelection(true);
       showPanHint();
     };

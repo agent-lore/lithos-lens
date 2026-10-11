@@ -2585,7 +2585,7 @@ a.blocker-chip:focus-visible {
   position: absolute;
   right: 0;
   top: var(--kgraph-toolbar-height, 0px);
-  width: min(26rem, 45%);
+  width: min(26rem, 45%, var(--kgraph-drawer-cap, 100%));
   z-index: 3;
 }
 

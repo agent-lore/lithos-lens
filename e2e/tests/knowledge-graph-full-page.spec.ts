@@ -1015,3 +1015,66 @@ for (const scenario of [
     expect(restored).toBe("");
   });
 }
+
+// ── The operator's zoom, and a fit in flight (round 4) ────────────────
+
+test("opening a panel on a note zoomed in to the maximum only pans: the drawer makes room", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2&canvas=full`);
+  await canvasReady(page);
+  const focusAt = () =>
+    page.evaluate(() => {
+      const cy = (window as any).LithosLensKnowledgeGraph.cy;
+      const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+      const at = cy.nodes(".focus").renderedPosition();
+      return { x: box.left + at.x, y: box.top + at.y };
+    });
+  const zoom = () => page.evaluate(() => (window as any).LithosLensKnowledgeGraph.cy.zoom());
+  // The operator's own wheel, over the focus, up to Cytoscape's maximum.
+  const start = await focusAt();
+  await page.mouse.move(start.x, start.y);
+  await expect
+    .poll(async () => {
+      await page.mouse.wheel(0, -400);
+      return zoom();
+    })
+    .toBe(3);
+  const model = await positions(page);
+  const at = await focusAt();
+
+  await page.mouse.click(at.x, at.y);
+  await nodePanel(page, PLAN);
+  await settledLayout(page);
+
+  const g = await geometry(page);
+  expect(g.zoom).toBe(3);
+  expect(await positions(page)).toEqual(model);
+  unobscured(g);
+});
+
+test("a toggle's animated fit is not cut short by the resize it causes", async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2&selected=${PLAN}`);
+  await canvasReady(page);
+
+  await page.locator("[data-kgraph-full-toggle]").click();
+  await settledLayout(page);
+  await settledLayout(page);
+
+  const g = await geometry(page);
+  // The graph does not fit at 768px: the fit opens at the readable floor,
+  // centred on the selected note in the usable area — as reduced motion
+  // reaches it at once.
+  expect(g.zoom).toBeCloseTo(g.minReadable, 6);
+  const selection = {
+    x: (g.selection!.left + g.selection!.right) / 2 - g.canvas.left,
+    y: (g.selection!.top + g.selection!.bottom) / 2 - g.canvas.top,
+  };
+  expect(Math.abs(selection.x - (g.usable.x1 + g.usable.x2) / 2)).toBeLessThan(1);
+  expect(Math.abs(selection.y - (g.usable.y1 + g.usable.y2) / 2)).toBeLessThan(1);
+  unobscured(g);
+});

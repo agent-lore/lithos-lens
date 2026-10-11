@@ -2005,11 +2005,15 @@ keys to its `kgraph-full` class, never to the server's mark:
   resized (the header re-measured) — room is made for the selected note at
   the zoom it is drawn at: the key, then the sheet, then the toolbar give
   way, each capped (and scrolled) to no less than its own toggle row, and
-  only what is short is taken; then the note is panned into the band at the
-  same zoom. Only when the overlays cannot give way enough is the zoom
-  lowered about the note, never below `MIN_READABLE_ZOOM`. The caps are
-  re-made from the overlays' own sizes every time, so room no longer needed
-  is given back. Refits and pans the operator
+  only what is short is taken; short of width beside a drawer, the key is
+  counted off the bottom and the drawer narrows, to no less than 18rem.
+  Then the note is panned into the band; the zoom is the operator's and is
+  never changed for it (a note drawn larger than the canvas less every
+  overlay's floor is centred in what there is). The caps are re-made from
+  the overlays' own sizes every time, so room no longer needed is given
+  back. A change of geometry while a refit or pan is moving builds on where
+  it is going: a fit is fitted again to the new geometry, never stopped
+  part-way. Refits and pans the operator
   caused animate unless `prefers-reduced-motion`; a load does not
 - **the panel**: an explicit open (a text or panel link, a canvas click)
   puts the focus on the panel's heading; Esc (except in a search field it
