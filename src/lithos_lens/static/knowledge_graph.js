@@ -208,6 +208,11 @@
       if (value === null || value === undefined || value === "") params.delete(key);
       else params.set(key, value);
     });
+    // `canvas` last, where the server writes it (D17): one address, one
+    // spelling, so the history's string compares see a reselection as one.
+    const canvas = params.getAll(CANVAS_KEY);
+    params.delete(CANVAS_KEY);
+    canvas.forEach(function (value) { params.append(CANVAS_KEY, value); });
     return params.toString();
   }
 

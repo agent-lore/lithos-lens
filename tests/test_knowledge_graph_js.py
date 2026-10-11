@@ -2632,3 +2632,34 @@ def test_the_close_link_closes_in_place_unless_modified(
     assert plain["focused"] == ["toggle"]
     assert modified["pushes"] == [] and modified["marks"] == [{"prevented": False}]
     assert modified["panel"] == "server-panel"
+
+
+def test_a_canvas_click_spells_its_address_as_the_server_does(
+    lithos_lens_config_env: Path,
+) -> None:
+    """On a full page, a canvas click's address puts ``canvas`` last, as the
+    server writes every link — so the text's link to the same selection is
+    the same address, and re-selecting it pushes no second entry."""
+    start = f"{ROUTE}?focus={PLAN}&canvas=full"
+    selected = f"{ROUTE}?focus={PLAN}&edge={SUPPORTS}&canvas=full"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, start)
+        server = knowledge_graph_url(
+            parse_knowledge_graph_params(_query(start)), edge=SUPPORTS
+        )
+    dom = {**_full_page_dom(page), "presentation": "full"}
+    result = _run(
+        page,
+        (f"tap-edge:{SUPPORTS}", "swap", f"text-click:{selected}", "swap"),
+        dom=dom,
+    )
+
+    assert server == selected
+    assert [push["url"] for push in result["pushes"]] == [selected]
+    canvas_request = result["ajax"][0]["path"]
+    assert canvas_request.split("?", 1)[1] == (
+        f"focus={PLAN}&edge={SUPPORTS}&canvas=full&render={page.dom['render']}"
+    )
+    # A toolbar control navigates to the same spelling too.
+    controls = _run(page, ("colour:type",), dom=dom)
+    assert controls["assigns"] == [f"{ROUTE}?focus={PLAN}&colour=type&canvas=full"]
