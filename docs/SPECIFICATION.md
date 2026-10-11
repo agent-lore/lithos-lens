@@ -225,7 +225,10 @@ The current application exposes these routes:
   type instead of namespace (§5.7, Knowledge graph canvas). In focus mode
   `expand=<note-id>`, repeatable and ordered, expands each note in place (§5.7,
   Knowledge graph expansion); duplicates and the focus are dropped, and
-  outside focus mode it is ignored.
+  outside focus mode it is ignored. `canvas=full` presents the same view on a
+  canvas that fills the window (§5.7, Knowledge graph full page); any other
+  value is the inline canvas. It is presentation only, in every mode: every
+  link keeps it, and it is not part of the view a panel click names.
 - `GET /knowledge/graph/panel`
   The node or edge panel alone (§5.7, Knowledge graph panels), for the same
   query as the page, plus `render=<id>` naming the view that page drew: the
@@ -1727,7 +1730,13 @@ the swap and the URL. A panel renders only for what the view draws: a
 node in it, or a typed edge (a wiki-link or provenance pair has no panel).
 The picker, a refused view, an offline page or an id not drawn render no
 panel on the page; the fragment answers them 200 with "Not in this view", or
-"Lithos is offline" with nothing read.
+"Lithos is offline" with nothing read. Every panel answer, the one-line ones
+included, leads with **Close** (K2 S10): a plain link to the page with no
+`selected=` / `edge=`, keeping as `pin=` the edge whose exemption the drawn
+view needs (the view's own `pinned`, which the payload does not carry), so
+the page it loads draws the same picture. Its heading (the node's title, the
+edge's sentence) takes the keyboard focus on an explicit open (§5.7,
+Knowledge graph full page).
 
 The **node panel**: the note's title linking to `/note/{id}` (a ghost its
 short id, "note not found" and its full id; an unread node its full id and
@@ -1857,7 +1866,7 @@ offline page or an empty scope) loads the vendored Cytoscape and
 `knowledge_graph.js` (not the task graph's `graph.js`: the two share
 Cytoscape and the stylesheet's conventions, no code), and renders a toolbar,
 the canvas and the canvas's key between the scope line and the panel host,
-all `hidden` until the script has drawn. The panel host stays full width
+all `hidden` until the script has drawn — one stage with the host (K2 S10). The panel host stays full width
 under the canvas at every width. The canvas draws exactly the payload's
 nodes and edges — the server filtered them before its cap, so nothing is
 hidden or revealed client-side (an edge only its `edge=`/`pin=` exemption
@@ -1945,6 +1954,58 @@ draws stays drawn whatever the slider says):
   then,
   onto an entry whose address differs (the fragment aside), reloads it so
   the server renders that URL's panel, text and picture together
+
+**Knowledge graph full page** (K2 S10, D17). `canvas=full` is presentation:
+the server parses it in every mode, writes it last into every link its URL
+builder makes (the picker's facet and contradictions links and its typed-in
+scope form, as a hidden field, included; a new scope or focus keeps it) and
+marks the page (`data-kgraph-presentation`), and nothing it reads, draws or
+embeds depends on it — the payload does not carry it, and the rendered-view
+key (`RenderedViews`) leaves it out, so a page toggled in place keeps
+answering panel clicks from the view it drew. Without the script it changes
+nothing visible: the canvas stays hidden and the text is the page. With it,
+`knowledge_graph.js` applies the mode — every full-page rule in `lens.css`
+keys to its `kgraph-full` class, never to the server's mark:
+
+- **the frame**: the stage (toolbar, canvas, pan hint, key and panel host;
+  each overlay a sibling of the Cytoscape box) is the first thing under
+  `header.shell-header`, as wide as the window and as tall as the dynamic
+  viewport less the header's measured height (measured again on resize);
+  the page's heading and the scope line are moved below it, the start of
+  the text, which keeps the shell's column. A `canvas=full` load applies
+  this before Cytoscape is built, so it lays out at the full-page size
+- **over the canvas**: the toolbar along its top, its controls folding
+  behind a "Controls" disclosure below 768px (the pill and the unresolved
+  count stay out); the key in the bottom-left corner behind a "Key"
+  disclosure; the pan hint under the toolbar; the panel as a drawer over the
+  right side below the toolbar at 768px and wider (`min(26rem, 45%)`), a
+  bottom sheet below 768px, with its own scroll that does not chain to the
+  page. The wheel over the canvas zooms; over the panel it scrolls the
+  panel. The toolbar's **Text view** (`#kgraph-text`, the scope line) and
+  the page's own scrollbar reach the text
+- **the toggle**: "Full page" / "Exit full page" (`aria-pressed`) switches
+  in place: it retires the panel request in flight (as a Back does), sets
+  the frame, pushes the address with `canvas` rewritten, rewrites `canvas`
+  on every server-written `/knowledge/graph` `href`, panel `hx-get` (before
+  its `render=`), `hx-push-url` and pushed-URL record on the page —
+  the panel on screen included — and has htmx re-process each changed
+  `hx-*`, keeps the pill and the shown address current, then resizes and
+  refits without moving a node. Back or Forward over a toggle reloads that
+  address, as any other history move does
+- **the usable area**: in full page, fits, pans and the pan hint use the
+  canvas less the toolbar, the key and an open drawer or sheet, each taken
+  off the side that loses the least area. A fit is clamped to
+  `MIN_READABLE_ZOOM`; a graph that then does not fit is centred on the
+  selection, else the focus. A panel opening over the selection pans it
+  into the usable area at the same zoom. Refits and pans the operator
+  caused animate unless `prefers-reduced-motion`; a load does not
+- **the panel**: an explicit open (a text or panel link, a canvas click)
+  puts the focus on the panel's heading; Esc (except in a search field it
+  clears) or Close empties the host in place, pushes the panel's close link,
+  unlights the selection, and returns the focus to the link that opened it,
+  or to the toggle when that link was replaced or the panel was a canvas
+  click's or the page's own. Esc never leaves full page. A modified or
+  middle click on Close follows it as a link
 
 ### 5.8 Live Updates
 
@@ -3302,7 +3363,9 @@ Lens's failure modes rather than its routes:
   `hidden_by_provenance`, `hidden_total`, `refusal` (the reason, on a
   refusal), `snapshot_age_s`, and the facts lookup's `facts.hits`, `.reads`,
   `.missing`, `.capped` and `.failed`, and the `expand=` requests as
-  `expansions.requested`, `.applied`, `.unreached` and `.refused` — every
+  `expansions.requested`, `.applied`, `.unreached` and `.refused`, and
+  `canvas` (`inline` | `full`: the presentation asked for, in every mode;
+  not a label, and not on the panel fragment) — every
   count set in every mode, zero
   for the picker and an offline page, `depth` in focus mode only; and
   `lens_knowledge_graph_renders_total` by `mode` and `outcome` (`rendered` |

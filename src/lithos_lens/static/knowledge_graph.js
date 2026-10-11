@@ -33,12 +33,21 @@
      force-directed `cose` for a scoped graph — once per page load. A click
      opens the S5 panel through htmx and lights the selection; it never moves
      a node.
+
+  5. FULL PAGE IS PRESENTATION (D17). `canvas=full` draws the same view: the
+     server only marks the page with it, and this file applies it — a class,
+     the heading and scope line moved below the stage — so without the
+     script nothing changes. "Full page" / "Exit full page" switches in
+     place: the address and every graph link on the page change, the
+     viewport is refitted, and no node moves.
 */
 (function () {
   "use strict";
 
+  const GRAPH_PATH = "/knowledge/graph";
   const PANEL_PATH = "/knowledge/graph/panel";
   const RENDER_KEY = "render";
+  const CANVAS_KEY = "canvas";
   const PROVENANCE_GROUPS = ["inferred", "reinforced", "declared", "other"];
 
   const INK = "#1e2723";
@@ -97,6 +106,9 @@
 
   const MAX_FIT_ZOOM = 1.4;
   const FIT_PADDING = 24;
+  //: How long a refit or a pan after a toggle or a panel takes, unless the
+  //: operator prefers reduced motion.
+  const MOTION_MS = 250;
   // Labels are the canvas's content: the fit that opens it may not shrink
   // them past MIN_RENDERED_FONT pixels. A graph that cannot then fit is
   // opened at that zoom on its focus (or its centre), and the pan hint says
@@ -311,6 +323,12 @@
   const abandoned = [];
   //: Re-lights the canvas from the address (set by `draw`).
   let lightFromUrl = function () {};
+  //: The canvas's side of a panel opening or closing (set by `draw`): the
+  //: usable area re-measured, the selection kept in it.
+  let panelMoved = function () {};
+  //: The control that opened the panel on screen: where Esc or Close
+  //: returns the focus. None for a canvas click or a panel the page loaded.
+  let panelInvoker = null;
 
   function withoutFragment(href) {
     const hash = href.indexOf("#");
@@ -332,7 +350,10 @@
     const detail = event.detail || {};
     if (retired || !panelHost || detail.target !== panelHost) return;
     const page = pushUrlOf(detail.elt);
-    pendingPush = page ? { page: page, xhr: detail.xhr, elt: detail.elt } : null;
+    // What opened it, for the focus to return to on close: a text or panel
+    // link; none for a canvas click.
+    const invoker = detail.elt === canvasSource ? null : detail.elt;
+    pendingPush = page ? { page: page, xhr: detail.xhr, elt: detail.elt, invoker: invoker } : null;
   }
 
   function pushAfterSwap(event) {
@@ -340,6 +361,7 @@
     if (retired || !pendingPush || detail.xhr !== pendingPush.xhr) return;
     if (detail.target !== panelHost || panelHost.isConnected === false) return;
     const page = pendingPush.page;
+    const invoker = pendingPush.invoker;
     pendingPush = null;
     const target = new URL(page, window.location.href).href;
     if (withoutFragment(target) !== withoutFragment(window.location.href)) {
@@ -348,6 +370,7 @@
     syncRefresh();
     shownHref = window.location.href;
     lightFromUrl();
+    panelShown(invoker);
   }
 
   function dropAbandoned(event) {
@@ -355,17 +378,23 @@
     if (detail.xhr && abandoned.indexOf(detail.xhr) !== -1) event.preventDefault();
   }
 
+  // The panel request in flight, retired: by a Back or Forward, a full-page
+  // toggle or a close. Should its response land anyway, `dropAbandoned`
+  // stops htmx before it reads it.
+  function abandonPending() {
+    if (!pendingPush) return;
+    const xhr = pendingPush.xhr;
+    abandoned.push(xhr);
+    // The request itself: `hx-sync` keeps it on the host, not on the
+    // element that issued it, so an `htmx:abort` event would miss it.
+    if (xhr && typeof xhr.abort === "function") xhr.abort();
+    pendingPush = null;
+  }
+
   function onTravel() {
     syncRefresh();
     if (!panelHost) return;
-    if (pendingPush) {
-      const xhr = pendingPush.xhr;
-      abandoned.push(xhr);
-      // The request itself: `hx-sync` keeps it on the host, not on the
-      // element that issued it, so an `htmx:abort` event would miss it.
-      if (xhr && typeof xhr.abort === "function") xhr.abort();
-      pendingPush = null;
-    }
+    abandonPending();
     if (withoutFragment(window.location.href) === withoutFragment(shownHref)) {
       // The entry's panel is the one on screen; the canvas lights it again.
       lightFromUrl();
@@ -373,6 +402,206 @@
     }
     retired = true;
     window.location.reload();
+  }
+
+  // ── The panel's close, its focus and Esc (D17) ───────────────────────
+  //
+  // An explicit open — a text or panel link, a canvas click — puts the
+  // keyboard focus on the panel's heading once its fragment is in. Esc
+  // (anywhere but a field Esc already clears) or the panel's Close empties
+  // the host, pushes the panel's own close link — this view with no
+  // selection, keeping as `pin=` the edge whose exemption the drawing needs,
+  // which the server wrote because the payload does not know it — and gives
+  // the focus back to what opened the panel, or to the toggle, a canvas
+  // control, when that was replaced or there was none. Esc never leaves
+  // full page.
+
+  function hasPanel() {
+    if (!panelHost) return false;
+    if (panelHost.childElementCount > 0) return true;
+    return String(panelHost.innerHTML || "").trim() !== "";
+  }
+
+  function within(root, selector) {
+    return root && typeof root.querySelector === "function" ? root.querySelector(selector) : null;
+  }
+
+  function panelShown(invoker) {
+    panelInvoker = invoker || null;
+    if (panelHost && "scrollTop" in panelHost) panelHost.scrollTop = 0;
+    panelMoved(true);
+    const heading = within(panelHost, "[data-kgraph-panel-heading]") ||
+      within(panelHost, "[data-kgraph-panel-close]");
+    // Not scrolled to for a canvas click: the panel is beside the picture.
+    if (heading && typeof heading.focus === "function") {
+      heading.focus({ preventScroll: !invoker });
+    }
+  }
+
+  function closePanel() {
+    if (retired || !hasPanel()) return false;
+    const link = within(panelHost, "[data-kgraph-panel-close]");
+    const target = link
+      ? link.getAttribute("href")
+      : pageUrl(queryWith({ selected: null, edge: null }));
+    abandonPending();
+    panelHost.innerHTML = "";
+    if (withoutFragment(new URL(target, window.location.href).href) !==
+        withoutFragment(window.location.href)) {
+      window.history.pushState({ kgraph: true }, "", target);
+    }
+    syncRefresh();
+    shownHref = window.location.href;
+    panelMoved(false);
+    const invoker = panelInvoker;
+    panelInvoker = null;
+    const back = invoker && invoker.isConnected !== false && typeof invoker.focus === "function"
+      ? invoker
+      : document.querySelector("[data-kgraph-full-toggle]");
+    if (back && typeof back.focus === "function") back.focus();
+    return true;
+  }
+
+  function onKeydown(event) {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    const target = event.target || {};
+    if (target.tagName === "SELECT") return;
+    if (target.tagName === "INPUT" && target.type === "search" && target.value) return;
+    if (closePanel()) event.preventDefault();
+  }
+
+  function onCloseClick(event) {
+    const target = event.target;
+    const link = target && typeof target.closest === "function"
+      ? target.closest("[data-kgraph-panel-close]")
+      : null;
+    if (!link || !panelHost || typeof panelHost.contains !== "function" ||
+        !panelHost.contains(link)) return;
+    // A middle, modified or context click opens the link as a link.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (closePanel()) event.preventDefault();
+  }
+
+  // ── Full page (D17): presentation, carried by every graph link ──────
+  //
+  // The server writes `canvas=full` into every link it renders, and marks
+  // the page; this file applies it. A toggle switches in place, in order:
+  // the panel request in flight is retired (as a Back would), the class
+  // goes on and the address is pushed, every server-rendered graph link,
+  // panel request and push URL on the page is rewritten — and htmx told
+  // of each one whose `hx-*` changed — then the pill and `shownHref`
+  // follow, and the canvas is resized and refitted with every node where
+  // it was. A Back or Forward over a toggle reloads that address, as any
+  // other history move does.
+
+  let fullPage = false;
+  //: Whether the heading and the scope line are below the stage.
+  let textMoved = false;
+
+  // One key of a query string: `+` a space, percent-decoded.
+  function pairKey(pair) {
+    const raw = pair.split("=")[0].replace(/\+/g, " ");
+    try {
+      return decodeURIComponent(raw);
+    } catch (error) {
+      return raw;
+    }
+  }
+
+  // `href` with its `canvas` rewritten and every other pair exactly as it
+  // was spelled: none for inline; `canvas=full` last for full page — before
+  // a panel request's `render`, as the server writes them.
+  function withCanvas(href, full) {
+    const hash = href.indexOf("#");
+    const fragment = hash === -1 ? "" : href.slice(hash);
+    const base = hash === -1 ? href : href.slice(0, hash);
+    const question = base.indexOf("?");
+    const path = question === -1 ? base : base.slice(0, question);
+    const pairs = question === -1 ? [] : base.slice(question + 1).split("&").filter(Boolean);
+    const kept = pairs.filter(function (pair) { return pairKey(pair) !== CANVAS_KEY; });
+    if (full) {
+      let at = kept.length;
+      kept.forEach(function (pair, index) {
+        if (at === kept.length && pairKey(pair) === RENDER_KEY) at = index;
+      });
+      kept.splice(at, 0, CANVAS_KEY + "=full");
+    }
+    return path + (kept.length ? "?" + kept.join("&") : "") + fragment;
+  }
+
+  //: The attributes a graph link keeps its addresses in, and the path each
+  //: names: the page, or its panel fragment.
+  const LINK_ATTRIBUTES = [
+    ["href", GRAPH_PATH, false],
+    ["hx-push-url", GRAPH_PATH, true],
+    ["data-kgraph-push-url", GRAPH_PATH, false],
+    ["hx-get", PANEL_PATH, true]
+  ];
+
+  function rewriteLinks(full) {
+    const page = document.querySelector("[data-knowledge-graph]");
+    if (!page || typeof page.querySelectorAll !== "function") return;
+    const changed = [];
+    const links = page.querySelectorAll("[href], [hx-get], [hx-push-url], [data-kgraph-push-url]");
+    Array.prototype.forEach.call(links, function (elt) {
+      let reprocess = false;
+      LINK_ATTRIBUTES.forEach(function (spec) {
+        const value = elt.getAttribute(spec[0]);
+        // Only what the server wrote: a root-relative address on that path.
+        if (!value || value.split(/[?#]/)[0] !== spec[1]) return;
+        const next = withCanvas(value, full);
+        if (next === value) return;
+        elt.setAttribute(spec[0], next);
+        if (spec[2]) reprocess = true;
+      });
+      if (reprocess) changed.push(elt);
+    });
+    // htmx read each link's `hx-*` when it processed it: it re-reads a
+    // changed one only when asked.
+    if (window.htmx && typeof window.htmx.process === "function") {
+      changed.forEach(function (elt) { window.htmx.process(elt); });
+    }
+  }
+
+  function measureHeader() {
+    const header = document.querySelector("header.shell-header");
+    const root = document.documentElement;
+    if (!header || !root || !root.style || typeof header.getBoundingClientRect !== "function") return;
+    root.style.setProperty("--kgraph-header-height", header.getBoundingClientRect().height + "px");
+  }
+
+  // The page's frame for one mode: the class the stylesheet keys every
+  // full-page rule to; the heading and the scope line above the stage
+  // inline, the start of the text below it in full page — moved, not
+  // reordered by CSS, so focus and reading order follow what is shown; the
+  // toolbar's toggle and "Text view".
+  function applyFrame(full) {
+    fullPage = full;
+    const body = document.body;
+    if (body && body.classList) body.classList.toggle("kgraph-full", full);
+    const page = document.querySelector("[data-knowledge-graph]");
+    const stage = document.querySelector("[data-kgraph-stage]");
+    if (full !== textMoved && page && stage && stage.parentNode === page &&
+        typeof page.querySelector === "function") {
+      const text = [page.querySelector(":scope > header"), page.querySelector("[data-kgraph-scope]")]
+        .filter(Boolean);
+      if (full) stage.after.apply(stage, text);
+      else stage.before.apply(stage, text);
+      textMoved = full;
+    }
+    const toggle = document.querySelector("[data-kgraph-full-toggle]");
+    if (toggle) {
+      toggle.textContent = full ? "Exit full page" : "Full page";
+      toggle.setAttribute("aria-pressed", full ? "true" : "false");
+    }
+    const textLink = document.querySelector("[data-kgraph-text-link]");
+    if (textLink) textLink.hidden = !full;
+    if (full) measureHeader();
+  }
+
+  function reducedMotion() {
+    return typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
 
   // ── "Graph changed — refresh" (D14): never an auto re-layout ────────────
@@ -764,6 +993,18 @@
       { selector: ".picked", style: { "overlay-color": INK, "overlay-opacity": 0.12, "overlay-padding": 5 } }
     );
 
+    // The frame first: Cytoscape measures its container as it is built, so
+    // a `canvas=full` load lays out at the full-page size (D17). The toolbar
+    // and the key are shown now too, so what lies over the canvas is in
+    // place when the view is fitted to what it leaves.
+    const page = document.querySelector("[data-knowledge-graph]");
+    applyFrame(!!(page && page.dataset && page.dataset.kgraphPresentation === "full"));
+    const toolbar = document.querySelector("[data-kgraph-toolbar]");
+    if (toolbar) toolbar.hidden = false;
+    const key = document.querySelector("[data-kgraph-key]");
+    if (key) key.hidden = false;
+    const host = document.querySelector("#kgraph-panel");
+    panelHost = host;
     // Revealed before Cytoscape is built: it measures its container.
     container.hidden = false;
     if (container.replaceChildren) container.replaceChildren();
@@ -838,31 +1079,70 @@
       }
     }
     placeEndLabels(cy);
-    // Fitted at the widest too: a title lit once the view is open stays in it.
-    cy.fit(undefined, FIT_PADDING);
-    if (cy.zoom() > MAX_FIT_ZOOM) {
-      cy.zoom(MAX_FIT_ZOOM);
-      cy.center();
-    } else if (cy.zoom() < MIN_READABLE_ZOOM) {
-      cy.zoom(MIN_READABLE_ZOOM);
-      const focus = cy.nodes(".focus");
-      cy.center(focus.length ? focus : undefined);
-    }
-    cy.nodes().removeClass("widest");
-    // Says so while — and only while — part of the graph is outside the
-    // view: on opening, after every pan, zoom or resize, and after a
-    // selection or a search re-weights titles.
+
+    // ── What lies over the canvas, and the area it leaves (D17) ─────────
+    // Inline, nothing. In full page the toolbar, the key and an open drawer
+    // or bottom sheet, each taken off the side of the canvas whose loss is
+    // the least area — the toolbar off the top, the drawer off the right,
+    // the key and the sheet off the bottom — so a fit, a pan and the pan
+    // hint all work in what the operator can see. Measured again whenever
+    // one of them may have moved.
+    const stage = document.querySelector("[data-kgraph-stage]");
     const panHint = document.querySelector("[data-kgraph-pan-hint]");
-    const showPanHint = function () {
+    let usable = { x1: 0, y1: 0, x2: cy.width(), y2: cy.height() };
+
+    function heightOf(elt) {
+      return elt && typeof elt.getBoundingClientRect === "function"
+        ? elt.getBoundingClientRect().height
+        : 0;
+    }
+
+    function measureOverlays() {
+      const width = cy.width();
+      const height = cy.height();
+      const open = hasPanel();
+      // The drawer sits under the toolbar and the key above the sheet.
+      if (stage && stage.classList) stage.classList.toggle("kgraph-panel-open", open);
+      if (stage && stage.style) {
+        stage.style.setProperty("--kgraph-toolbar-height", heightOf(toolbar) + "px");
+        stage.style.setProperty("--kgraph-panel-height", (open ? heightOf(host) : 0) + "px");
+      }
+      const inset = { top: 0, right: 0, bottom: 0, left: 0 };
+      if (fullPage && typeof container.getBoundingClientRect === "function") {
+        const box = container.getBoundingClientRect();
+        [toolbar, key, open ? host : null].forEach(function (elt) {
+          if (!elt || elt.hidden || typeof elt.getBoundingClientRect !== "function") return;
+          const over = elt.getBoundingClientRect();
+          const x1 = Math.max(over.left - box.left, 0);
+          const x2 = Math.min(over.right - box.left, width);
+          const y1 = Math.max(over.top - box.top, 0);
+          const y2 = Math.min(over.bottom - box.top, height);
+          if (x2 <= x1 || y2 <= y1) return;
+          const sides = [
+            ["top", y2, y2 * width],
+            ["bottom", height - y1, (height - y1) * width],
+            ["left", x2, x2 * height],
+            ["right", width - x1, (width - x1) * height]
+          ].sort(function (a, b) { return a[2] - b[2]; });
+          inset[sides[0][0]] = Math.max(inset[sides[0][0]], sides[0][1]);
+        });
+      }
+      usable = { x1: inset.left, y1: inset.top, x2: width - inset.right, y2: height - inset.bottom };
+      if (usable.x2 - usable.x1 < 1 || usable.y2 - usable.y1 < 1) {
+        usable = { x1: 0, y1: 0, x2: width, y2: height };
+      }
+    }
+
+    // Says so while — and only while — part of the graph is outside the
+    // view (the usable area, in full page): on opening, after every pan,
+    // zoom or resize, and after a selection or a search re-weights titles.
+    function showPanHint() {
       if (!panHint) return;
       const drawn = cy.elements().renderedBoundingBox();
       panHint.hidden = !(
-        drawn.x1 < 0 || drawn.y1 < 0 || drawn.x2 > cy.width() || drawn.y2 > cy.height()
+        drawn.x1 < usable.x1 || drawn.y1 < usable.y1 ||
+        drawn.x2 > usable.x2 || drawn.y2 > usable.y2
       );
-    };
-    if (panHint) {
-      showPanHint();
-      cy.on("viewport resize", showPanHint);
     }
 
     // ── Lit and dimmed: the selection and its neighbours ────────────────
@@ -883,67 +1163,22 @@
       return collection.filter(function (element) { return element.data("pid") === pid; });
     }
 
-    // From the URL, on load and after a Back onto the same address: `edge=`
-    // wins over `selected=`, as the parser reads them; `pin=` is never a
-    // selection. An id the payload does not draw lights nothing.
-    lightFromUrl = function () {
+    // The URL's selection: `edge=` wins over `selected=`, as the parser
+    // reads them; `pin=` is never a selection. An id the payload does not
+    // draw selects nothing.
+    function urlSelection() {
       const query = new URLSearchParams(window.location.search);
       const selectedEdge = queryValue(query, "edge");
       const selectedNode = selectedEdge ? "" : queryValue(query, "selected");
-      if (selectedEdge) {
-        light(byPid(cy.edges(".typed"), selectedEdge));
-      } else if (selectedNode) {
-        light(byPid(cy.nodes(), selectedNode));
-      } else {
-        light(null);
-      }
-    };
-    lightFromUrl();
-
-    // ── Clicks open the S5 panel ────────────────────────────────────────
-    const host = document.querySelector("#kgraph-panel");
-    const panelSource = document.querySelector("[data-kgraph-panel-source]");
-    panelHost = host;
-    canvasSource = panelSource;
-
-    function openPanel(changes) {
-      const pageQuery = queryWith(changes);
-      const panelParams = new URLSearchParams(pageQuery);
-      const render = host && host.dataset ? host.dataset.kgraphRender || "" : "";
-      if (render) panelParams.set(RENDER_KEY, render);
-      const page = pageUrl(pageQuery);
-      if (!window.htmx || !panelSource) {
-        window.location.assign(page);
-        return;
-      }
-      // Pushed once this request's fragment is in the host (`trackPanel`).
-      canvasPage = page;
-      window.htmx.ajax("GET", PANEL_PATH + "?" + panelParams.toString(), {
-        source: panelSource,
-        target: "#kgraph-panel",
-        swap: "innerHTML"
-      });
+      if (selectedEdge) return byPid(cy.edges(".typed"), selectedEdge);
+      if (selectedNode) return byPid(cy.nodes(), selectedNode);
+      return cy.collection();
     }
 
-    cy.on("tap", "node", function (event) {
-      const pid = event.target.data("pid");
-      const now = new URLSearchParams(window.location.search);
-      // A node opened from a view drawn for an edge pins that edge, as the
-      // text's node links do (`knowledge_graph_url`), so the panel is drawn
-      // from the very view on screen.
-      const pin = queryValue(now, "edge") || queryValue(now, "pin") || null;
-      light(event.target);
-      openPanel({ selected: pid, edge: null, pin: pin });
-    });
-    cy.on("tap", "edge", function (event) {
-      // Only a typed row has an edge panel; a layer pair is not one.
-      if (!event.target.hasClass("typed")) return;
-      light(event.target);
-      openPanel({ edge: event.target.data("pid"), selected: null, pin: null });
-    });
-    cy.on("tap", function (event) {
-      if (event.target === cy) light(null);
-    });
+    // Lit from the URL on load and after a Back onto the same address.
+    lightFromUrl = function () {
+      light(urlSelection());
+    };
 
     // ── The toolbar ─────────────────────────────────────────────────────
     const filters = payload.filters || {};
@@ -1089,10 +1324,171 @@
       }));
     }
 
-    const toolbar = document.querySelector("[data-kgraph-toolbar]");
-    if (toolbar) toolbar.hidden = false;
-    const key = document.querySelector("[data-kgraph-key]");
-    if (key) key.hidden = false;
+    // ── The fit: everything in the usable area, never below readable ────
+    // Cytoscape's own `fit` pads every side alike; this one fits to the
+    // area the overlays leave. At most MAX_FIT_ZOOM, and never below
+    // MIN_READABLE_ZOOM: a graph that then does not fit is centred on its
+    // selection, else its focus, and the pan hint says the rest is a drag
+    // away. A refit or a pan the operator caused moves smoothly unless they
+    // prefer reduced motion; a load does not. No node moves.
+    function moveTo(viewport, animate) {
+      cy.stop(true, false);
+      if (animate && !reducedMotion()) {
+        container.dataset.canvasMotion = "moving";
+        cy.animate({ zoom: viewport.zoom, pan: viewport.pan }, {
+          duration: MOTION_MS,
+          complete: function () { container.dataset.canvasMotion = "still"; }
+        });
+      } else {
+        cy.viewport(viewport);
+        container.dataset.canvasMotion = "still";
+      }
+    }
+
+    function centreOf(box) {
+      return { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+    }
+
+    function fitView(animate) {
+      measureOverlays();
+      const box = cy.elements().boundingBox();
+      const roomW = usable.x2 - usable.x1 - 2 * FIT_PADDING;
+      const roomH = usable.y2 - usable.y1 - 2 * FIT_PADDING;
+      let zoom = Math.min(roomW / box.w, roomH / box.h, MAX_FIT_ZOOM, cy.maxZoom());
+      let centre = centreOf(box);
+      if (!(zoom >= MIN_READABLE_ZOOM)) {
+        zoom = MIN_READABLE_ZOOM;
+        const selection = urlSelection();
+        const anchor = selection.length ? selection : cy.nodes(".focus");
+        if (anchor.length) centre = centreOf(anchor.boundingBox());
+      }
+      zoom = Math.max(zoom, cy.minZoom());
+      const middle = centreOf(usable);
+      moveTo({
+        zoom: zoom,
+        pan: { x: middle.x - zoom * centre.x, y: middle.y - zoom * centre.y }
+      }, animate);
+    }
+
+    // The selection kept in the usable area when a drawer or a sheet opens
+    // over it: a pan, at the zoom it is.
+    function revealSelection(animate) {
+      const selection = urlSelection();
+      if (!fullPage || !selection.length) return;
+      const box = selection.renderedBoundingBox();
+      const shift = function (low, high, from, to) {
+        if (high - low + 2 * FIT_PADDING > to - from) return (from + to) / 2 - (low + high) / 2;
+        if (low < from + FIT_PADDING) return from + FIT_PADDING - low;
+        if (high > to - FIT_PADDING) return to - FIT_PADDING - high;
+        return 0;
+      };
+      const dx = shift(box.x1, box.x2, usable.x1, usable.x2);
+      const dy = shift(box.y1, box.y2, usable.y1, usable.y2);
+      if (!dx && !dy) return;
+      const pan = cy.pan();
+      moveTo({ zoom: cy.zoom(), pan: { x: pan.x + dx, y: pan.y + dy } }, animate);
+    }
+
+    // Fitted at the widest too: a title lit once the view is open stays in it.
+    fitView(false);
+    cy.nodes().removeClass("widest");
+    cy.on("resize", measureOverlays);
+    if (panHint) {
+      showPanHint();
+      cy.on("viewport resize", showPanHint);
+    }
+    lightFromUrl();
+
+    // ── Clicks open the S5 panel ────────────────────────────────────────
+    const panelSource = document.querySelector("[data-kgraph-panel-source]");
+    canvasSource = panelSource;
+
+    function openPanel(changes) {
+      const pageQuery = queryWith(changes);
+      const panelParams = new URLSearchParams(pageQuery);
+      const render = host && host.dataset ? host.dataset.kgraphRender || "" : "";
+      if (render) panelParams.set(RENDER_KEY, render);
+      const page = pageUrl(pageQuery);
+      if (!window.htmx || !panelSource) {
+        window.location.assign(page);
+        return;
+      }
+      // Pushed once this request's fragment is in the host (`trackPanel`).
+      canvasPage = page;
+      window.htmx.ajax("GET", PANEL_PATH + "?" + panelParams.toString(), {
+        source: panelSource,
+        target: "#kgraph-panel",
+        swap: "innerHTML"
+      });
+    }
+
+    cy.on("tap", "node", function (event) {
+      const pid = event.target.data("pid");
+      const now = new URLSearchParams(window.location.search);
+      // A node opened from a view drawn for an edge pins that edge, as the
+      // text's node links do (`knowledge_graph_url`), so the panel is drawn
+      // from the very view on screen.
+      const pin = queryValue(now, "edge") || queryValue(now, "pin") || null;
+      light(event.target);
+      openPanel({ selected: pid, edge: null, pin: pin });
+    });
+    cy.on("tap", "edge", function (event) {
+      // Only a typed row has an edge panel; a layer pair is not one.
+      if (!event.target.hasClass("typed")) return;
+      light(event.target);
+      openPanel({ edge: event.target.data("pid"), selected: null, pin: null });
+    });
+    cy.on("tap", function (event) {
+      if (event.target === cy) light(null);
+    });
+
+    // ── Full page: the toggle, the disclosures, the panel (D17) ─────────
+    function setFullPage(full) {
+      if (full === fullPage || retired) return;
+      abandonPending();
+      lightFromUrl();
+      applyFrame(full);
+      window.history.pushState(
+        { kgraph: true }, "", withCanvas(withoutFragment(window.location.href), full));
+      rewriteLinks(full);
+      syncRefresh();
+      shownHref = window.location.href;
+      cy.resize();
+      fitView(true);
+    }
+
+    const toggle = document.querySelector("[data-kgraph-full-toggle]");
+    if (toggle) {
+      toggle.addEventListener("click", function () { setFullPage(!fullPage); });
+    }
+
+    // "Controls" (below 768px) and "Key": shown in full page only.
+    [["[data-kgraph-controls-toggle]", toolbar], ["[data-kgraph-key-toggle]", key]]
+      .forEach(function (pair) {
+        const button = document.querySelector(pair[0]);
+        const box = pair[1];
+        if (!button || !box) return;
+        button.addEventListener("click", function () {
+          const open = button.getAttribute("aria-expanded") !== "true";
+          button.setAttribute("aria-expanded", open ? "true" : "false");
+          if (box.classList) box.classList.toggle("kgraph-disclosed", open);
+          measureOverlays();
+          showPanHint();
+        });
+      });
+
+    panelMoved = function (opened) {
+      if (!opened) light(null);
+      measureOverlays();
+      if (opened) revealSelection(true);
+      showPanHint();
+    };
+
+    // The shell header's height changes with the window's width.
+    window.addEventListener("resize", function () {
+      if (fullPage) measureHeader();
+      cy.resize();
+    });
 
     shownHref = window.location.href;
     container.dataset.canvasState = "ready";
@@ -1107,7 +1503,11 @@
       nodePalette: NODE_PALETTE,
       nodeNeutral: NODE_NEUTRAL,
       edgeWidth: edgeWidth,
-      blank: blank
+      blank: blank,
+      minReadableZoom: MIN_READABLE_ZOOM,
+      withCanvas: withCanvas,
+      fullPage: function () { return fullPage; },
+      usableArea: function () { return Object.assign({}, usable); }
     };
   }
 
@@ -1135,6 +1535,8 @@
     document.addEventListener("htmx:beforeRequest", trackPanel);
     document.addEventListener("htmx:beforeOnLoad", dropAbandoned);
     document.addEventListener("htmx:afterSwap", pushAfterSwap);
+    document.addEventListener("keydown", onKeydown);
+    document.addEventListener("click", onCloseClick);
     window.addEventListener("popstate", onTravel);
     listen();
   }

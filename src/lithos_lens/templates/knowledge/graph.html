@@ -9,7 +9,10 @@
   so the two cannot disagree. The picker renders when no scope is given. A
   drawn view gets the canvas and its toolbar after the scope line, both
   hidden until `knowledge_graph.js` draws; the node or edge panel (S5) sits
-  in its host under them, full width.
+  in its host under them, full width. All of it is one stage: full page
+  (D17) lays the stage over the window and its toolbar, key and panel over
+  the canvas, and moves the heading and the scope line below it — the
+  script's doing, so `canvas=full` changes nothing without it.
 -#}
 
 {% from "knowledge/graph_macros.html" import collapse_preview, expansion_ref, node_ref, panel_attrs %}
@@ -60,7 +63,7 @@
 {% set drawn = view is not none and view.refusal is none and view.nodes %}
 
 {% block content %}
-  <section class="kgraph-page" data-knowledge-graph data-mode="{{ mode }}">
+  <section class="kgraph-page" data-knowledge-graph data-mode="{{ mode }}" data-kgraph-presentation="{{ params.canvas }}">
     <header>
       <p class="eyebrow"><a href="/knowledge">Knowledge</a></p>
       <h1>{% if mode == "picker" %}Knowledge graph{% elif mode == "focus" %}Graph around a note{% else %}Graph by scope{% endif %}</h1>
@@ -75,15 +78,27 @@
     {% elif view is not none %}
       {% include "knowledge/graph_scope.html" %}
 
-      {% if drawn %}{% include "knowledge/graph_canvas.html" %}{% endif %}
-
       {#- The panel host: the page's panel on a full request (or why an
           `edge=` the snapshot lacks has none), the fragment an edge or node
           link — or a canvas click — fetches. Full width under the canvas at
-          every width (S4 D2). -#}
-      <div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host data-kgraph-render="{{ render_id }}">
-        {%- if panel is not none or panel_notice %}{% include "knowledge/graph_panel.html" %}{% endif -%}
-      </div>
+          every width (S4 D2); a drawer or bottom sheet over it in full page
+          (D17), its own scroll. -#}
+      {% set panel_host -%}
+        <div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host data-kgraph-render="{{ render_id }}">
+          {%- if panel is not none or panel_notice %}{% include "knowledge/graph_panel.html" %}{% endif -%}
+        </div>
+      {%- endset %}
+
+      {% if drawn %}
+        {#- One positioned stage: every overlay a sibling of the Cytoscape
+            box, never inside it, so a wheel over the panel never zooms. -#}
+        <div class="kgraph-stage" data-kgraph-stage>
+          {% include "knowledge/graph_canvas.html" %}
+          {{ panel_host }}
+        </div>
+      {% else %}
+        {{ panel_host }}
+      {% endif %}
 
       {% if view.refusal is not none %}
         {% include "knowledge/graph_refusal.html" %}

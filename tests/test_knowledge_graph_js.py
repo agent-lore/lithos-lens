@@ -27,6 +27,7 @@ import subprocess
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
@@ -89,11 +90,20 @@ const entries = [{ href: url.href, state: null }];
 let cursor = 0;
 const windowListeners = {};
 
+const focused = [];
 function el(extra) {
+  const classes = new Set();
   return Object.assign({
     dataset: {},
     attributes: {},
-    style: {},
+    style: { setProperty() {} },
+    classList: {
+      toggle(name, on) { if (on) classes.add(name); else classes.delete(name); },
+      contains(name) { return classes.has(name); },
+      values() { return Array.from(classes); },
+    },
+    isConnected: true,
+    focus() { focused.push(this.name || this.href || "?"); },
     hidden: false,
     textContent: "",
     value: "",
@@ -161,8 +171,26 @@ const single = {
   "[data-kgraph-search]": el({ value: dom.searchValue || "" }),
   "[data-kgraph-search-count]": el({ textContent: dom.searchCount || "" }),
   "[data-kgraph-panel-source]": el({ attributes: { "hx-sync": dom.sync } }),
-  "#kgraph-panel": el({ dataset: { kgraphRender: dom.render }, innerHTML: "" }),
+  "#kgraph-panel": el({
+    dataset: { kgraphRender: dom.render }, innerHTML: dom.panel || "" }),
+  "[data-kgraph-full-toggle]": el({ name: "toggle", textContent: "Full page" }),
+  "[data-kgraph-text-link]": el({ hidden: true }),
 };
+// The page section and the graph links the server wrote in it (D17), each
+// with the attributes it was rendered with.
+const pageLinks = (dom.links || []).map((attributes) =>
+  el({ attributes: { ...attributes } }));
+const processed = [];
+single["[data-knowledge-graph]"] = el({
+  dataset: { kgraphPresentation: dom.presentation || "inline" },
+  querySelectorAll() { return pageLinks; },
+  querySelector() { return null; },
+});
+// The panel on screen: its close link (the server's href) and its heading.
+const closeLink = el({ name: "close", attributes: { href: dom.closeHref || "" } });
+closeLink.closest = (selector) =>
+  selector === "[data-kgraph-panel-close]" ? closeLink : null;
+const heading = el({ name: "heading" });
 // The refresh pill, when the page rendered one: hidden, linking to itself.
 if (dom.pillHref !== undefined) {
   single["[data-kgraph-refresh-pill]"] = el({
@@ -176,6 +204,7 @@ const many = {
 };
 const documentListeners = {};
 const document = {
+  body: el(),
   readyState: "interactive",
   querySelector(selector) { return single[selector] || null; },
   querySelectorAll(selector) { return many[selector] || []; },
@@ -221,6 +250,10 @@ const sandbox = {
   setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
 };
 const host = single["#kgraph-panel"];
+host.querySelector = (selector) => !host.innerHTML ? null
+  : selector === "[data-kgraph-panel-close]" ? closeLink
+  : selector === "[data-kgraph-panel-heading]" ? heading : null;
+host.contains = (node) => !!host.innerHTML && (node === closeLink || node === heading);
 // htmx as the page sees it: `ajax` (or a text link's click) ISSUES a request
 // — `htmx:beforeRequest` on its element, carrying the request and its
 // target — and nothing more. Its fragment lands only when a `swap` action
@@ -228,6 +261,8 @@ const host = single["#kgraph-panel"];
 // that is never swapped is one the server redirected or a later click
 // aborted. `trigger(elt, "htmx:abort")` is recorded.
 sandbox.window = {
+  matchMedia: (query) => ({ matches: dom.reducedMotion !== false &&
+    query === "(prefers-reduced-motion: reduce)" }),
   location: {
     get pathname() { return url.pathname; },
     get search() { return url.search; },
@@ -264,6 +299,7 @@ sandbox.window = {
     trigger(elt, type) {
       triggered.push({ type, elt: elt === panelSource ? "canvas" : elt.href });
     },
+    process(elt) { processed.push(pageLinks.indexOf(elt)); },
   },
 };
 const xhrs = [];
@@ -418,6 +454,20 @@ for (const action of actions) {
   } else if (kind === "rerun") {
     // A second run of the file over the same page.
     vm.runInContext(fs.readFileSync(scriptPath, "utf8"), sandbox);
+  } else if (kind === "toggle") {
+    single["[data-kgraph-full-toggle]"].fire("click");
+  } else if (kind === "escape" || kind === "close-click") {
+    // Esc, from a field holding `arg` (a search box) or from the page; or a
+    // plain click on the panel's Close (`close-click:ctrl` a modified one).
+    const field = arg ? { tagName: "INPUT", type: "search", value: arg } : {};
+    const event = kind === "escape"
+      ? { key: "Escape", target: kind === "escape" && arg ? field : {} }
+      : { target: closeLink, button: 0, ctrlKey: arg === "ctrl" };
+    event.defaultPrevented = false;
+    event.preventDefault = () => { event.defaultPrevented = true; };
+    const type = kind === "escape" ? "keydown" : "click";
+    (documentListeners[type] || []).forEach((fn) => fn(event));
+    marks.push({ prevented: event.defaultPrevented });
   } else if (kind === "back") {
     travel(-1);
   } else if (kind === "forward") {
@@ -487,6 +537,13 @@ console.log(JSON.stringify({
         href: single["[data-kgraph-refresh-pill]"].getAttribute("href") }
     : null,
   panel: host.innerHTML,
+  links: pageLinks.map((link) => link.attributes),
+  processed,
+  focused,
+  bodyClasses: document.body.classList.values(),
+  toggle: { text: single["[data-kgraph-full-toggle]"].textContent,
+    pressed: single["[data-kgraph-full-toggle]"].getAttribute("aria-pressed") },
+  textLinkHidden: single["[data-kgraph-text-link]"].hidden,
   canvas: { hidden: canvas.hidden, dataset: canvas.dataset },
   toolbarHidden: single["[data-kgraph-toolbar]"].hidden,
   keyHidden: single["[data-kgraph-key]"].hidden,
@@ -2289,3 +2346,230 @@ def test_a_page_with_no_event_source_still_draws_and_keeps_its_pill_down(
     assert result["eventSources"] == []
     assert result["canvas"]["dataset"]["canvasState"] == "ready"
     assert _pill(result)[0] is True
+
+
+# ── Full page (D17): presentation, carried by every graph link ─────────
+
+_LINK_ATTRIBUTES = ("href", "hx-get", "hx-push-url")
+
+
+class _Links(HTMLParser):
+    """Every element of the page section with an address attribute, its
+    attributes as the browser holds them (entities decoded)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        kept = {key: value or "" for key, value in attrs if key in _LINK_ATTRIBUTES}
+        if kept:
+            self.links.append(kept)
+
+
+def _page_links(html: str) -> list[dict[str, str]]:
+    section = html[html.index("data-knowledge-graph ") : html.index("</main>")]
+    parser = _Links()
+    parser.feed(section)
+    return parser.links
+
+
+def _close_href(html: str) -> str:
+    match = re.search(r'class="kgraph-panel-close" href="([^"]*)"', html)
+    return html_lib.unescape(match.group(1)) if match else ""
+
+
+def _full_page_dom(page: Page) -> dict[str, Any]:
+    host = re.search(r"data-kgraph-render=\"[^\"]*\">\s*(<section)", page.html)
+    return {
+        "links": _page_links(page.html),
+        "closeHref": _close_href(page.html),
+        "panel": "server-panel" if host else "",
+    }
+
+
+_RENDER_ID = re.compile(r"(render=)[A-Za-z0-9_-]+")
+
+
+def _unrendered_links(links: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        {key: _RENDER_ID.sub(r"\1-", value) for key, value in link.items()}
+        for link in links
+    ]
+
+
+def test_the_toggle_switches_in_place_and_writes_every_link_as_the_server_would(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Full page, then back: the address is pushed each way, every graph
+    link on the page — the text's, the panel's, the pill, "Not shown" — is
+    rewritten to exactly what the server writes for the toggled address,
+    htmx is told of each panel link, and no node moves or re-lays out."""
+    start = f"{ROUTE}?focus={PLAN}&depth=2&selected={CAPACITY}"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, start)
+        full = _page(client, f"{start}&canvas=full")
+    dom = _full_page_dom(page)
+    once = _run(page, ("mark", "toggle", "mark"), dom=dom)
+    twice = _run(page, ("mark", "toggle", "toggle", "mark"), dom=dom)
+
+    assert [push["url"] for push in once["pushes"]] == [
+        f"http://lens.test{start}&canvas=full"
+    ]
+    assert once["href"] == f"http://lens.test{start}&canvas=full"
+    assert once["bodyClasses"] == ["kgraph-full"]
+    assert once["toggle"] == {"text": "Exit full page", "pressed": "true"}
+    assert once["textLinkHidden"] is False
+    # Each link reads as the server's own full page writes it, render id aside.
+    toggled = [link for link in once["links"] if link.get("href") != "#kgraph-text"]
+    expected = [
+        link for link in _page_links(full.html) if link.get("href") != "#kgraph-text"
+    ]
+    assert len(toggled) > 20
+    assert _unrendered_links(toggled) == _unrendered_links(expected)
+    # The panel requests, and only they, re-read by htmx.
+    panel_links = [i for i, link in enumerate(dom["links"]) if "hx-get" in link]
+    assert panel_links and once["processed"] == panel_links
+    # Nothing moved; nothing re-laid out.
+    assert once["marks"][0] == once["marks"][1]
+
+    assert [push["url"] for push in twice["pushes"]] == [
+        f"http://lens.test{start}&canvas=full",
+        f"http://lens.test{start}",
+    ]
+    assert twice["links"] == dom["links"]
+    assert twice["bodyClasses"] == []
+    assert twice["toggle"] == {"text": "Full page", "pressed": "false"}
+    assert twice["marks"][0] == twice["marks"][1]
+
+
+def test_a_full_page_load_applies_the_frame_and_toggles_back_to_inline(
+    lithos_lens_config_env: Path,
+) -> None:
+    url = f"{ROUTE}?focus={PLAN}&canvas=full"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, url)
+    dom = {**_full_page_dom(page), "presentation": "full"}
+    loaded = _run(page, (), dom=dom)
+    left = _run(page, ("toggle",), dom=dom)
+
+    assert loaded["bodyClasses"] == ["kgraph-full"]
+    assert loaded["pushes"] == []
+    assert left["href"] == f"http://lens.test{ROUTE}?focus={PLAN}"
+    assert not [link for link in left["links"] if "canvas" in json.dumps(link)]
+
+
+def test_after_a_toggle_the_next_click_asks_for_the_same_view(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Panel open, toggle, another panel: the canvas's request names the
+    page's render id with the new mode, and the server answers it from the
+    view it drew — no redirect."""
+    start = f"{ROUTE}?focus={PLAN}&selected={CAPACITY}"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, start)
+        result = _run(
+            page, ("toggle", "tap-node:" + ROLLBACK, "swap"), dom=_full_page_dom(page)
+        )
+        request = result["ajax"][-1]["path"]
+        response = client.get(request)
+
+    assert _query(request) == {
+        "focus": PLAN,
+        "selected": ROLLBACK,
+        "canvas": "full",
+        "render": page.dom["render"],
+    }
+    assert "HX-Redirect" not in response.headers
+    assert f'data-kgraph-panel-id="{ROLLBACK}"' in response.text
+    assert [push["url"] for push in result["pushes"]] == [
+        f"http://lens.test{start}&canvas=full",
+        f"{ROUTE}?focus={PLAN}&selected={ROLLBACK}&canvas=full",
+    ]
+
+
+def test_a_toggle_retires_the_panel_request_in_flight(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(
+        page, ("tap-node:" + CAPACITY, "toggle", "swap:0"), dom=_full_page_dom(page)
+    )
+
+    assert result["aborted"] == [0]
+    # Its response, landing anyway, neither swaps nor pushes.
+    assert result["panel"] == ""
+    assert [push["url"] for push in result["pushes"]] == [
+        f"http://lens.test{ROUTE}?focus={PLAN}&canvas=full"
+    ]
+    # The canvas shows the address's selection: none.
+    assert result["picked"] == []
+
+
+def test_back_over_a_toggle_reloads_the_address_it_lands_on(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(page, ("toggle", "back"), dom=_full_page_dom(page))
+
+    assert result["reloads"] == [f"http://lens.test{ROUTE}?focus={PLAN}"]
+
+
+def test_esc_closes_the_panel_to_its_close_link_and_returns_the_focus(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A text link opens a panel (focus to its heading); Esc closes it —
+    the host emptied, the server's close link pushed, the selection unlit —
+    and gives the focus back to that link. A canvas click's panel gives it
+    to the toggle."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&edge={FAINT_EDGE}")
+    dom = _full_page_dom(page)
+    link = f"{ROUTE}?focus={PLAN}&selected={LEGACY}&pin={FAINT_EDGE}"
+    text = _run(page, ("text-click:" + link, "swap", "escape"), dom=dom)
+    canvas = _run(page, ("tap-node:" + LEGACY, "swap", "escape"), dom=dom)
+
+    closed = f"{ROUTE}?focus={PLAN}&pin={FAINT_EDGE}"
+    assert dom["closeHref"] == closed
+    assert text["focused"] == ["heading", link]
+    assert text["panel"] == ""
+    assert [push["url"] for push in text["pushes"]] == [link, closed]
+    assert text["href"] == f"http://lens.test{closed}"
+    assert text["picked"] == [] and text["lit"] == []
+    assert text["marks"] == [{"prevented": True}]
+    assert canvas["focused"] == ["heading", "toggle"]
+    assert canvas["href"] == f"http://lens.test{closed}"
+
+
+def test_esc_in_a_field_it_clears_or_with_no_panel_closes_nothing(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&selected={CAPACITY}")
+        bare = _page(client, f"{ROUTE}?focus={PLAN}")
+    in_search = _run(page, ("escape:capacity",), dom=_full_page_dom(page))
+    no_panel = _run(bare, ("escape",), dom=_full_page_dom(bare))
+
+    assert in_search["panel"] == "server-panel" and in_search["pushes"] == []
+    assert in_search["marks"] == [{"prevented": False}]
+    assert no_panel["pushes"] == [] and no_panel["marks"] == [{"prevented": False}]
+
+
+def test_the_close_link_closes_in_place_unless_modified(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&selected={CAPACITY}&canvas=full")
+    dom = {**_full_page_dom(page), "presentation": "full"}
+    plain = _run(page, ("close-click",), dom=dom)
+    modified = _run(page, ("close-click:ctrl",), dom=dom)
+
+    closed = f"{ROUTE}?focus={PLAN}&canvas=full"
+    assert [push["url"] for push in plain["pushes"]] == [closed]
+    assert plain["panel"] == "" and plain["marks"] == [{"prevented": True}]
+    # A panel the page loaded had no invoker: the focus goes to the toggle.
+    assert plain["focused"] == ["toggle"]
+    assert modified["pushes"] == [] and modified["marks"] == [{"prevented": False}]
+    assert modified["panel"] == "server-panel"

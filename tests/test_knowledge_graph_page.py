@@ -341,7 +341,7 @@ def test_an_edge_param_opens_a_drawn_edges_panel_else_is_ignored(
 ) -> None:
     named = _get(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge=edge_a07c5f3e18b2")
     assert 'data-kgraph-panel="edge" data-kgraph-panel-id="edge_a07c5f3e18b2"' in named
-    line = re.search(r"<h2 data-kgraph-sentence>(.*?)</h2>", named, re.S)
+    line = re.search(r"<h2 [^>]*data-kgraph-sentence>(.*?)</h2>", named, re.S)
     assert line is not None
     text = " ".join(re.sub(r"<[^>]+>", "", line.group(1)).split())
     assert text == "Influx migration plan refines Legacy ingest approach"

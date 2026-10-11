@@ -100,7 +100,12 @@ instance under the same contract (`gate-complete-action`, the gate row with
 Complete and the identity before the write, `complete-receipt`, the
 receipt banner after it with its Reopen gate follow-up, `proceed-anyway-confirm`, a timer gate's Proceed
 anyway confirm page, and `cancel-confirm`, the Cancel confirm page for the
-head of the demo's depth-5 chain):
+head of the demo's depth-5 chain), and the nine `knowledge-graph-full-*`
+captures `knowledge-graph-full-page.spec.ts` makes at `1440`, `768` and
+`390` (K2 S10's widths, its own): `-inline-` the inline canvas with a node
+panel, `-panel-` full page with its drawer or bottom sheet, `-controls-`
+full page with the controls and the key disclosed — the last two the
+viewport, not the full page, since the canvas is the window:
 
 ```
 e2e/artifacts/dashboard-320.png

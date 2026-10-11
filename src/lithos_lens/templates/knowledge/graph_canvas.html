@@ -6,65 +6,82 @@
   (the slider's value, the hidden count, each depth's would-be count, the
   key) and sets each control from it; every control navigates (S4 D3), so
   the server re-renders text, payload and canvas together.
+
+  Full page (D17) is the script's: "Full page" / "Exit full page" switches
+  in place; "Text view" jumps to the text under the canvas; below 768px the
+  controls fold behind "Controls" — the pill and the unresolved count stay
+  out — and the key sits behind "Key". Inline, the toolbar's two parts are
+  one row and neither disclosure is offered.
 -#}
 <div class="graph-toolbar kgraph-toolbar" data-kgraph-toolbar hidden>
-  {% if view.unresolved_contradictions %}
-    <span class="kgraph-unresolved" data-kgraph-unresolved-count>{{ view.unresolved_contradictions }} unresolved contradiction{{ "" if view.unresolved_contradictions == 1 else "s" }}</span>
-  {% endif %}
+  <div class="kgraph-toolbar-head">
+    {% if view.unresolved_contradictions %}
+      <span class="kgraph-unresolved" data-kgraph-unresolved-count>{{ view.unresolved_contradictions }} unresolved contradiction{{ "" if view.unresolved_contradictions == 1 else "s" }}</span>
+    {% endif %}
 
-  {#- Never an auto re-layout (D14): a knowledge event naming a node or edge
-      drawn here (any one, in a scoped-global view) raises this and waits for
-      the operator. The script points it at the page's current URL, so the
-      click is an ordinary reload — the server re-reads what went stale. -#}
-  <a class="graph-refresh-pill" data-kgraph-refresh-pill href="{{ knowledge_graph_url(params) }}" hidden>graph changed — refresh</a>
+    {#- Never an auto re-layout (D14): a knowledge event naming a node or edge
+        drawn here (any one, in a scoped-global view) raises this and waits for
+        the operator. The script points it at the page's current URL, so the
+        click is an ordinary reload — the server re-reads what went stale. -#}
+    <a class="graph-refresh-pill" data-kgraph-refresh-pill href="{{ knowledge_graph_url(params) }}" hidden>graph changed — refresh</a>
 
-  <label class="kgraph-control">Min weight
-    <input type="range" min="0" max="1" step="0.05" value="{{ view.filters.min_weight }}" data-kgraph-min-weight aria-describedby="kgraph-weight-hidden">
-    <output data-kgraph-min-weight-value>{{ view.filters.min_weight }}</output>
-  </label>
-  <span id="kgraph-weight-hidden" class="kgraph-count-text" data-kgraph-weight-hidden></span>
+    <button type="button" class="kgraph-full-toggle" data-kgraph-full-toggle aria-pressed="false">Full page</button>
+    <a class="kgraph-text-link" href="#kgraph-text" data-kgraph-text-link hidden>Text view</a>
+    <button type="button" class="kgraph-disclosure" data-kgraph-controls-toggle aria-expanded="false" aria-controls="kgraph-controls">Controls</button>
+  </div>
 
-  {% if view.provenance_facets %}
-    <fieldset class="kgraph-control-group" data-kgraph-provenance-group>
-      <legend>Provenance</legend>
-      {% for facet in view.provenance_facets %}
-        <label><input type="checkbox" value="{{ facet.group }}" data-kgraph-provenance="{{ facet.group }}"{% if facet.shown %} checked{% endif %}> {{ facet.group }} <span class="kgraph-count">{{ facet.count }}</span></label>
-      {% endfor %}
+  <div class="kgraph-controls" id="kgraph-controls" data-kgraph-controls>
+    <label class="kgraph-control">Min weight
+      <input type="range" min="0" max="1" step="0.05" value="{{ view.filters.min_weight }}" data-kgraph-min-weight aria-describedby="kgraph-weight-hidden">
+      <output data-kgraph-min-weight-value>{{ view.filters.min_weight }}</output>
+    </label>
+    <span id="kgraph-weight-hidden" class="kgraph-count-text" data-kgraph-weight-hidden></span>
+
+    {% if view.provenance_facets %}
+      <fieldset class="kgraph-control-group" data-kgraph-provenance-group>
+        <legend>Provenance</legend>
+        {% for facet in view.provenance_facets %}
+          <label><input type="checkbox" value="{{ facet.group }}" data-kgraph-provenance="{{ facet.group }}"{% if facet.shown %} checked{% endif %}> {{ facet.group }} <span class="kgraph-count">{{ facet.count }}</span></label>
+        {% endfor %}
+      </fieldset>
+    {% endif %}
+
+    {% if view.mode == "focus" %}
+      <fieldset class="kgraph-control-group" data-kgraph-depth-group>
+        <legend>Depth</legend>
+        {% for level in (1, 2) %}
+          <label><input type="radio" name="kgraph-depth" value="{{ level }}" data-kgraph-depth{% if level == view.depth %} checked{% endif %}> depth {{ level }}<span data-kgraph-depth-count="{{ level }}"></span></label>
+        {% endfor %}
+      </fieldset>
+    {% endif %}
+
+    <fieldset class="kgraph-control-group" data-kgraph-colour-group>
+      <legend>Colour notes by</legend>
+      <label><input type="radio" name="kgraph-colour" value="namespace" data-kgraph-colour{% if params.colour == "namespace" %} checked{% endif %}> namespace</label>
+      <label><input type="radio" name="kgraph-colour" value="type" data-kgraph-colour{% if params.colour == "type" %} checked{% endif %}> note type</label>
     </fieldset>
-  {% endif %}
 
-  {% if view.mode == "focus" %}
-    <fieldset class="kgraph-control-group" data-kgraph-depth-group>
-      <legend>Depth</legend>
-      {% for level in (1, 2) %}
-        <label><input type="radio" name="kgraph-depth" value="{{ level }}" data-kgraph-depth{% if level == view.depth %} checked{% endif %}> depth {{ level }}<span data-kgraph-depth-count="{{ level }}"></span></label>
-      {% endfor %}
-    </fieldset>
-  {% endif %}
+    <label class="kgraph-control">Find
+      <input type="search" placeholder="A title in this graph" data-kgraph-search>
+    </label>
+    <span class="kgraph-count-text" data-kgraph-search-count aria-live="polite"></span>
 
-  <fieldset class="kgraph-control-group" data-kgraph-colour-group>
-    <legend>Colour notes by</legend>
-    <label><input type="radio" name="kgraph-colour" value="namespace" data-kgraph-colour{% if params.colour == "namespace" %} checked{% endif %}> namespace</label>
-    <label><input type="radio" name="kgraph-colour" value="type" data-kgraph-colour{% if params.colour == "type" %} checked{% endif %}> note type</label>
-  </fieldset>
-
-  <label class="kgraph-control">Find
-    <input type="search" placeholder="A title in this graph" data-kgraph-search>
-  </label>
-  <span class="kgraph-count-text" data-kgraph-search-count aria-live="polite"></span>
-
-  {#- What a canvas click opens the panel through: htmx reads this element's
-      `hx-sync` (one panel request at a time, the later click wins, as the
-      text's panel links do); the script pushes the page URL itself once that
-      request's fragment is swapped in. -#}
-  <span data-kgraph-panel-source hx-sync="#kgraph-panel:replace" hidden></span>
+    {#- What a canvas click opens the panel through: htmx reads this element's
+        `hx-sync` (one panel request at a time, the later click wins, as the
+        text's panel links do); the script pushes the page URL itself once that
+        request's fragment is swapped in. -#}
+    <span data-kgraph-panel-source hx-sync="#kgraph-panel:replace" hidden></span>
+  </div>
 </div>
 
 <div class="kgraph-canvas" data-kgraph-canvas role="img" aria-label="The graph drawn above its text; the text below lists the same notes and edges" hidden></div>
 <p class="kgraph-pan-hint" data-kgraph-pan-hint hidden>Part of the graph is outside this view: drag to pan, or zoom out.</p>
 
 <div class="kgraph-key" data-kgraph-key hidden>
-  <ul class="kgraph-key-list" data-kgraph-key-edges aria-label="Edge types"></ul>
-  <ul class="kgraph-key-list" data-kgraph-key-nodes aria-label="Node colours"></ul>
-  <ul class="kgraph-key-list" data-kgraph-key-marks aria-label="Marks"></ul>
+  <button type="button" class="kgraph-disclosure" data-kgraph-key-toggle aria-expanded="false" aria-controls="kgraph-key-body">Key</button>
+  <div class="kgraph-key-body" id="kgraph-key-body">
+    <ul class="kgraph-key-list" data-kgraph-key-edges aria-label="Edge types"></ul>
+    <ul class="kgraph-key-list" data-kgraph-key-nodes aria-label="Node colours"></ul>
+    <ul class="kgraph-key-list" data-kgraph-key-marks aria-label="Marks"></ul>
+  </div>
 </div>
