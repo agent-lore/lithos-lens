@@ -222,7 +222,10 @@ The current application exposes these routes:
   `pin=<edge_id>` beside `selected=` keeps that edge drawn as `edge=` would:
   a Node details link on an edge's view carries it, so the page it loads is
   the view the link was on. `colour=type` colours the canvas's nodes by note
-  type instead of namespace (§5.7, Knowledge graph canvas).
+  type instead of namespace (§5.7, Knowledge graph canvas). In focus mode
+  `expand=<note-id>`, repeatable and ordered, expands each note in place (§5.7,
+  Knowledge graph expansion); duplicates and the focus are dropped, and
+  outside focus mode it is ignored.
 - `GET /knowledge/graph/panel`
   The node or edge panel alone (§5.7, Knowledge graph panels), for the same
   query as the page, plus `render=<id>` naming the view that page drew: the
@@ -1692,9 +1695,21 @@ and so when it is the assembly's own probe that sees the outage.
 A fragment naming a held view is drawn from it with nothing read, so it is
 that page's panel byte for byte whatever other tabs or the facts TTL did
 since. A held view answers only a selection that would draw it the same: the
-edge its `edge=` exemption alone drew (pinned) or, on a view no exemption
-changed, no edge or one it draws. A selection that would gain or lose an
-exemption is treated as a view not held. A render id no longer held (evicted,
+`edge=` / `pin=` it was drawn under (the same selection, of the same kind
+— so a pin gone from the data since, left in the address bar, still finds
+it — or of either kind when no walk leaves that edge undrawn: the view draws
+it and so does every collapse re-walk, so a `pin=` is nowhere discarded and
+assembles what the `edge=` does; an edge panel's Node details relies on it), or, on a view no exemption changed (not
+pinned: what it draws — expansions' reach and cap verdicts included — and
+what it offers — every note's expansion eligibility and every collapse
+preview — are the plain filters'), no edge, one it draws whose own pin would change
+nothing (not an edge an expansion drew that is within `depth` only through
+a hidden edge, D16), or its own undrawn `pin=`, which is discarded. An
+`edge=` whose exemption changed the view without drawing the edge (a
+refused step, a note's would-be count, a collapse preview) is not answered
+for that edge as a `pin=` (a node tap on its canvas), which would be
+discarded: the tap reloads the page. A selection that would gain or lose an exemption is treated as a view
+not held. A render id no longer held (evicted,
 or lost to a restart) is never
 answered with a panel from a different view beside the page's old graph: the
 response carries `HX-Redirect` to the full page with that selection, which
@@ -1745,6 +1760,96 @@ edge-table fetch". Below, both endpoints as cards — title, chips, lede, a
 701px breakpoint (stacked below it) and reserves the place of the deferred
 pool's resolve action: "Resolving a contradiction is not yet a Lens action."
 — no form, no button, no write. Any other edge stacks its cards.
+
+**Knowledge graph expansion** (K2 S8, D16). In focus mode, `expand=<id>`
+(repeatable; first occurrences in URL order, the focus dropped) draws every
+typed edge the filters show at that note, as at the focus, with their far
+endpoints: a note's edges are drawn when it is the focus, within `depth`, or
+expanded. Edges between drawn notes that are none of these stay undrawn, and
+expansion never extends the wiki-link and provenance layers (they stay the
+focus's, one hop). `lithos_lens.knowledge_graph_expansion` is the pass; it
+reads nothing:
+
+- **order**: the base typed view is assembled and capped first — a refused
+  base is refused whole, as above, before any `lithos_related` or facts read,
+  whatever it expands — then the focus's layers are read, then the requests
+  apply in URL order against that combined visible set, then facts are read
+  for the final typed nodes under the existing per-render cap, in hop order
+  (an expansion's notes take `hop(via) + 1`, so they come after the base)
+- **eligible roots**: any visible note, including one visible only through a
+  focus wiki-link or provenance pair (its typed edges are expanded; its own
+  `lithos_related` neighbourhood is not read) and a ghost. A request whose
+  note is not drawn when its turn comes is **unreached** and adds nothing
+- **two counts**: the cap still counts the focus and the distinct endpoints of
+  drawn typed edges; layer-only notes do not count. Visual additions count
+  notes absent from the combined visible set. Expanding into (or expanding) a
+  layer-only note **promotes** it to a typed endpoint: it counts towards the
+  cap, joins the facts read order, keeps its base place (hop 1, no `via`) and
+  its layer listing, and adds no visible note
+- **refused on its own**: a request that would take the cap count over
+  `graph_focus_max_nodes` adds nothing; the rest of the view is drawn and
+  later requests are still tried. It offers no weight remedy (the base
+  refusal keeps its depth and weight remedies). The `edge=` / `pin=`
+  exemption applies to expanded edges too, and counts towards the cap — but
+  — and an `edge=` selection keeps it whatever it does, refusing a step its
+  exempt edge would take over the cap. A `pin=` (beside `selected=`) the
+  expansions leave undrawn (its step refused, or out of reach) exempts
+  nothing: the view, its eligibility, hidden counts, depth predictions and
+  collapse previews are the plain filters' — what the page's links, which
+  drop that pin, load
+- **what the drawing shows** — the hidden counts (over each applied note's
+  unfiltered edges too), the provenance facets and the pinned selection — is
+  recounted over the final typed set; the would-be node count per depth stays
+  the base view's
+- **payload**: each node carries `expanded`, `via` (the request that first
+  drew it; null for the base, layer-only notes included even once promoted),
+  `undrawn_nodes` / `undrawn_edges` (the newly visible notes and filtered
+  typed edges expanding it would add to the final view; 0 for the focus and an
+  expanded note) and `expansion: {state, would_count, cap}` — `state` is
+  `available`, `focus`, `expanded`, `complete` (every filtered typed edge
+  drawn) or `over_cap`, and `would_count` the cap count it would give (the
+  current count when nothing would be added); `expansion` is null and the
+  counts 0 outside focus mode. The top level carries `expansions`, the
+  requests in URL order as `{id, state: applied|unreached|refused,
+  added_nodes, added_edges}` (0 when not applied), a refused one with its
+  `would_count`. A request whose note's edges are already all drawn applies
+  with zero additions and marks the note expanded
+- **text**: the scope line names the applied expansions ("· expanded: *B*,
+  *D*"), each with a **remove** link; their edges join the by-relation
+  sections as "*X* → *Y*" lines; **Not shown** lists each unreached request
+  ("Expanding *X* was not applied: it was not drawn when its turn came in the
+  expansion order" — a later request may have drawn it since) and each
+  refused one ("Expanding *B* would add 41 visible notes; 263 notes would
+  count towards the 250 cap"), each with a remove link
+- **node panel**: on any note but the focus, from the server's eligibility
+  (never the drawn node count): **Show its neighbours** — "adds N notes and M
+  edges" (or "adds M edges between notes already drawn"), and the cap count it
+  would give — a plain link to the page with the note last in `expand=` (an
+  earlier request for it, unreached at its turn, moves there) and `selected=`
+  kept; "All its edges are drawn" for a complete note; why
+  not, with the visible additions and the cap count apart, when over the cap;
+  **Collapse** on an expanded note. The focus has neither
+- **collapse / remove**: a link without that request and every request whose
+  note it first drew (`via`), transitively, even when another branch still
+  reaches that note — the remaining requests rebuild the view, so a note
+  another branch supplies stays. An unapplied request removes only itself.
+  Beside each Collapse and remove link, the dependent expansions it also
+  removes are named and counted; there is no confirmation step. The link
+  keeps `selected=` / `edge=` / `pin=` when the remaining requests still draw
+  that note or edge (the same pass re-run over the displayed view's data,
+  nothing read) and clears it otherwise. The preview is the displayed view's
+- **links**: the URL builder writes one `expand=` pair per request; depth and
+  filter links keep them (later requests may then go unreached); a change of
+  focus, type or namespace — Centre on this included — drops them. Panel URLs
+  carry them, so a rendered view's identity includes them. A drawn view whose
+  request names a `selected=` note or `pin=` edge it does not draw (removed by
+  a collapse, or gone from the data) emits no link carrying it
+- **freshness**: every request — an expansion or a collapse is one —
+  assembles the whole view from the latest available snapshot, layers and
+  facts, so unrelated elements may change too; warm caches still read the
+  focus's `lithos_related`, and an expired snapshot or stale facts are read
+  again. The canvas draws an expanded payload as any other, laid out once on
+  load (in-place expansion is S9)
 
 **Knowledge graph canvas** (K2 S4) — an enhancement: the page is complete
 without it. A view that draws any node (not the picker, a refusal, an
@@ -3196,7 +3301,9 @@ Lens's failure modes rather than its routes:
   `outcome`, `depth` (focus mode), `nodes`, `edges`, `hidden_by_weight`,
   `hidden_by_provenance`, `hidden_total`, `refusal` (the reason, on a
   refusal), `snapshot_age_s`, and the facts lookup's `facts.hits`, `.reads`,
-  `.missing`, `.capped` and `.failed` — every count set in every mode, zero
+  `.missing`, `.capped` and `.failed`, and the `expand=` requests as
+  `expansions.requested`, `.applied`, `.unreached` and `.refused` — every
+  count set in every mode, zero
   for the picker and an offline page, `depth` in focus mode only; and
   `lens_knowledge_graph_renders_total` by `mode` and `outcome` (`rendered` |
   `refused` | `unavailable` | `offline`). The focus id, type and namespace

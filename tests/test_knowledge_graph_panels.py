@@ -1142,7 +1142,13 @@ def test_a_kept_view_answers_only_selections_that_keep_its_drawing() -> None:
     plain = KnowledgeGraphView(
         mode="focus", filters=KnowledgeGraphFilters(), edges=(refines,)
     )
-    pinned = replace(plain, edges=(refines, faint), pinned="edge_faint")
+    # As the assembly draws it: under the filters its own pin exempts.
+    pinned = replace(
+        plain,
+        filters=KnowledgeGraphFilters(selected_edge="edge_faint"),
+        edges=(refines, faint),
+        pinned="edge_faint",
+    )
     on_plain = views.keep(replace(focus, edge=REFINES), plain)
     on_pinned = views.keep(replace(focus, edge="edge_faint"), pinned)
 

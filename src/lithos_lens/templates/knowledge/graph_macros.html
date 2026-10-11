@@ -31,3 +31,18 @@
   {%- set href = knowledge_graph_url(params, edge=edge, selected=selected) -%}
   href="{{ href }}" hx-get="{{ knowledge_graph_panel_url(params, render=render_id, edge=edge, selected=selected) }}" hx-target="#kgraph-panel" hx-swap="innerHTML" hx-sync="#kgraph-panel:replace" hx-push-url="{{ href }}"
 {%- endmacro %}
+
+{#- Beside a Collapse or remove link (D16): the later expansions it removes
+    with it — those whose note it first drew — named and counted, as the
+    displayed view knows them. No confirmation step. -#}
+{% macro collapse_preview(view, root) -%}
+  {%- set also = expansion_dependants(view, root) -%}
+  {%- if also %} — <span class="kgraph-note" data-kgraph-collapse-preview>also removes {{ also | length }} later expansion{{ "" if also | length == 1 else "s" }}: {{ also | join(", ") }}</span>{% endif -%}
+{%- endmacro %}
+
+{#- An expansion request named by its note in the view, or by its id when the
+    view does not draw it (an unreached request). -#}
+{% macro expansion_ref(view, root) -%}
+  {%- set node = view.node(root) -%}
+  {%- if node is not none %}{{ node_ref(node) }}{% else %}<span class="kgraph-id">{{ root }}</span>{% endif -%}
+{%- endmacro %}

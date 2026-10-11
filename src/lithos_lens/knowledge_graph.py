@@ -1,13 +1,14 @@
-"""Knowledge graph assembly: focus (ego) and scoped-global views (K2 D3, D6–D9, D11).
+"""Knowledge graph assembly: focus and scoped-global views (K2 D3, D6–D9, D11, D16).
 
 Everything here is assembled from the edge-table snapshot
 (:mod:`lithos_lens.knowledge_edges`), one ``lithos_related`` neighbourhood and
 the note facts cache (:mod:`lithos_lens.knowledge_facts`), so the page (S3)
 only renders:
 
-- **Typed edges** from the snapshot. Focus mode takes the focus's edges and, at
-  depth 2, each neighbour's; scoped-global mode takes the rows of a ``type``
-  and/or ``namespace``. Nodes are the endpoints.
+- **Typed edges** from the snapshot, the pure half of a view that runs before
+  any read (:mod:`lithos_lens.knowledge_graph_typed`). Focus mode takes the
+  focus's edges and, at depth 2, each neighbour's; scoped-global mode takes
+  the rows of a ``type`` and/or ``namespace``. Nodes are the endpoints.
 - **Filters before everything else.** ``min_weight`` (default
   ``[knowledge].graph_min_weight_default``, 0.1) and the provenance groups
   (inferred / reinforced / declared / other) hide edges BEFORE depth 2 expands
@@ -26,23 +27,27 @@ only renders:
   no pairs to draw). Their nodes take the inline title and spend no facts read.
   A failed call drops both layers and says so; a ``doc_not_found`` makes the
   focus a ghost whose typed edges are still drawn.
+- **Expansions** (``expand=``, D16) apply after the base view fit and the
+  layers loaded, against both, in URL order: a layer-only note can expand its
+  typed edges, and nothing more is read for it.
 - **Facts** for the typed nodes from the cache, read in priority order: the
   focus, then by hop, then by degree in view, then id (global: degree, id).
   A missing note is a ghost — short-id label, dashed, never dropped, and listed
   under "edges to missing notes".
 
 The records it fills, and the payload, are in
-:mod:`lithos_lens.knowledge_graph_view`.
+:mod:`lithos_lens.knowledge_graph_view`. Every request assembles afresh from
+the latest available snapshot, layers and facts, so a view after an expansion
+may differ elsewhere too.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Awaitable, Callable, Iterable, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from types import MappingProxyType
 from typing import Any, Literal
 
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
@@ -54,16 +59,24 @@ from lithos_lens.knowledge_edges import (
     KnowledgeEdge,
 )
 from lithos_lens.knowledge_facts import NoteFactsBatch, NoteFactsCache, is_doc_not_found
+from lithos_lens.knowledge_graph_expansion import KnowledgeExpansion
+from lithos_lens.knowledge_graph_typed import (
+    DEFAULT_FOCUS_MAX_NODES,
+    DEFAULT_GLOBAL_MAX_NODES,
+    KnowledgeTypedGraph,
+    ego_typed_graph,
+    expanded_typed_graph,
+    global_typed_graph,
+    scoped_rows,
+)
 from lithos_lens.knowledge_graph_view import (
     DEFAULT_DEPTH,
     DEFAULT_FILTERS,
     LAYER_LEGEND,
     MAX_DEPTH,
     PROVENANCE,
-    PROVENANCE_GROUPS,
     WIKI_LINK,
     EdgeKind,
-    HiddenEdgeCounts,
     KnowledgeGraphEdge,
     KnowledgeGraphFilters,
     KnowledgeGraphNode,
@@ -71,23 +84,10 @@ from lithos_lens.knowledge_graph_view import (
     KnowledgeGraphView,
     KnowledgeLayerRef,
     LayerRelation,
-    ProvenanceFacet,
     RefusalReason,
-    provenance_group,
 )
 
 logger = logging.getLogger(__name__)
-
-# Mirror the ``[lithos-lens.knowledge]`` config defaults, as knowledge_edges
-# does; ``tests/test_knowledge_facts.py`` pins both to the ones Config carries.
-# The page passes the configured caps in.
-DEFAULT_FOCUS_MAX_NODES = 250
-DEFAULT_GLOBAL_MAX_NODES = 500
-
-# Counts the unfiltered assembly the hidden counts are taken over.
-_SHOW_ALL = KnowledgeGraphFilters(
-    min_weight=float("-inf"), provenance=frozenset(PROVENANCE_GROUPS)
-)
 
 #: The injected ``lithos_related`` read: ``client.related``.
 RelatedRead = Callable[[str], Awaitable[RelatedNeighborhood]]
@@ -98,235 +98,6 @@ Clock = Callable[[], datetime]
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
-
-
-@dataclass(frozen=True)
-class KnowledgeTypedGraph:
-    """The typed-edge half of a view, from the snapshot alone, before any read.
-
-    ``hops`` maps each node to its distance from the focus (0 for the focus;
-    every node is 0 in global mode), in the order nodes were reached.
-    """
-
-    hops: Mapping[str, int]
-    edges: tuple[KnowledgeEdge, ...]
-    hidden: HiddenEdgeCounts = HiddenEdgeCounts()
-    #: Node count each depth would draw under the current filters (focus mode).
-    would_be_nodes: Mapping[int, int] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
-    provenance_facets: tuple[ProvenanceFacet, ...] = ()
-    refusal: KnowledgeGraphRefusal | None = None
-    #: The ``edge=`` / ``pin=`` selection when only its exemption draws it:
-    #: the drawing differs from the plain filters'. ``""`` otherwise.
-    pinned: str = ""
-
-
-# ── typed assembly (pure, snapshot only) ───────────────────────────────
-
-
-def _expand(
-    edges_of: Callable[[str], Sequence[KnowledgeEdge]],
-    focus: str,
-    depth: int,
-    filters: KnowledgeGraphFilters,
-) -> tuple[dict[str, int], dict[str, KnowledgeEdge]]:
-    """BFS from the focus over the edges ``filters`` shows, ``depth`` hops."""
-    hops = {focus: 0}
-    edges: dict[str, KnowledgeEdge] = {}
-    frontier = [focus]
-    for hop in range(1, depth + 1):
-        reached: list[str] = []
-        for node_id in frontier:
-            for edge in edges_of(node_id):
-                if not filters.shows(edge):
-                    continue
-                edges.setdefault(edge.edge_id, edge)
-                for end in edge.endpoints:
-                    if end not in hops:
-                        hops[end] = hop
-                        reached.append(end)
-        frontier = reached
-    return hops, edges
-
-
-def _ego(
-    edges_of: Callable[[str], Sequence[KnowledgeEdge]],
-    focus: str,
-    depth: int,
-    filters: KnowledgeGraphFilters,
-) -> tuple[dict[str, int], dict[str, KnowledgeEdge]]:
-    """:func:`_expand`, plus the ``edge=`` selection when the filters hid the
-    path to it: a selected edge within ``depth`` hops of the focus is drawn
-    with its endpoints (at their unfiltered hop) whatever hides the way in."""
-    hops, edges = _expand(edges_of, focus, depth, filters)
-    selected = filters.selected_edge
-    if selected and selected not in edges:
-        reach, unfiltered = _expand(edges_of, focus, depth, _SHOW_ALL)
-        edge = unfiltered.get(selected)
-        if edge is not None:
-            edges[selected] = edge
-            for end in edge.endpoints:
-                hops.setdefault(end, reach[end])
-    return hops, edges
-
-
-def _scoped_nodes(edges: Iterable[KnowledgeEdge]) -> dict[str, int]:
-    return {end: 0 for edge in edges for end in edge.endpoints}
-
-
-def _hidden(
-    drawn: Mapping[str, KnowledgeEdge],
-    unfiltered: Mapping[str, KnowledgeEdge],
-    filters: KnowledgeGraphFilters,
-) -> HiddenEdgeCounts:
-    rows = unfiltered.values()
-    return HiddenEdgeCounts(
-        by_weight=sum(1 for edge in rows if filters.hides_by_weight(edge)),
-        by_provenance=sum(1 for edge in rows if filters.hides_by_provenance(edge)),
-        total=len(unfiltered.keys() - drawn.keys()),
-    )
-
-
-def _provenance_facets(
-    rows: Iterable[KnowledgeEdge], filters: KnowledgeGraphFilters
-) -> tuple[ProvenanceFacet, ...]:
-    counts: Counter[str] = Counter()
-    values: dict[str, set[str]] = {}
-    for edge in rows:
-        group = provenance_group(edge.provenance_type)
-        counts[group] += 1
-        # Only NULL is "null": an empty string is a value as stored.
-        raw = "null" if edge.provenance_type is None else edge.provenance_type
-        values.setdefault(group, set()).add(raw)
-    return tuple(
-        ProvenanceFacet(
-            group,
-            counts[group],
-            tuple(sorted(values[group])),
-            group in filters.provenance,
-        )
-        for group in PROVENANCE_GROUPS
-        if counts[group]
-    )
-
-
-def _weight_remedy(
-    count_at: Callable[[KnowledgeGraphFilters], int],
-    filters: KnowledgeGraphFilters,
-    cap: int,
-) -> tuple[float, int] | None:
-    """The lowest ``min_weight`` in tenths above the current one that fits."""
-    for tenth in range(1, 11):
-        weight = tenth / 10
-        if weight <= filters.min_weight + 1e-9:
-            continue
-        count = count_at(replace(filters, min_weight=weight))
-        if count <= cap:
-            return weight, count
-    return None
-
-
-def ego_typed_graph(
-    snapshot: EdgeTableSnapshot,
-    focus: str,
-    *,
-    depth: int = DEFAULT_DEPTH,
-    filters: KnowledgeGraphFilters = DEFAULT_FILTERS,
-    max_nodes: int = DEFAULT_FOCUS_MAX_NODES,
-) -> KnowledgeTypedGraph:
-    """The focus's typed graph at ``depth``, filtered, with its cap verdict.
-
-    A lookup over the snapshot's endpoint index: no Lithos call. The node
-    count per depth is the same lookup at depth 1 and 2.
-    """
-    depth = min(max(depth, 1), MAX_DEPTH)
-    hops, edges = _ego(snapshot.edges_of, focus, depth, filters)
-    _, unfiltered = _expand(snapshot.edges_of, focus, depth, _SHOW_ALL)
-    selected = filters.selected_edge
-    plain = replace(filters, selected_edge="")
-    pinned = (
-        selected
-        if selected in edges
-        and selected not in _expand(snapshot.edges_of, focus, depth, plain)[1]
-        else ""
-    )
-
-    def count_at(candidate: KnowledgeGraphFilters, at_depth: int = depth) -> int:
-        return len(_ego(snapshot.edges_of, focus, at_depth, candidate)[0])
-
-    would_be = {
-        level: (len(hops) if level == depth else count_at(filters, level))
-        for level in range(1, MAX_DEPTH + 1)
-    }
-    refusal = None
-    if len(hops) > max_nodes:
-        refusal = KnowledgeGraphRefusal("too_many_nodes", len(hops), max_nodes)
-        if depth > 1 and would_be[1] <= max_nodes:
-            refusal = replace(refusal, remedy_depth=1, remedy_count=would_be[1])
-        elif (remedy := _weight_remedy(count_at, filters, max_nodes)) is not None:
-            refusal = replace(
-                refusal, remedy_min_weight=remedy[0], remedy_count=remedy[1]
-            )
-    return KnowledgeTypedGraph(
-        hops=MappingProxyType(hops),
-        edges=tuple(edges.values()),
-        hidden=_hidden(edges, unfiltered, filters),
-        would_be_nodes=MappingProxyType(would_be),
-        provenance_facets=_provenance_facets(unfiltered.values(), filters),
-        refusal=refusal,
-        pinned=pinned,
-    )
-
-
-def scoped_rows(
-    snapshot: EdgeTableSnapshot, *, type: str | None, namespace: str | None
-) -> tuple[KnowledgeEdge, ...]:
-    """The snapshot rows of a ``type`` and/or ``namespace`` (both: their overlap)."""
-    if type is None and namespace is None:
-        raise ValueError("a scoped graph needs type= and/or namespace=")
-    rows = (
-        snapshot.of_type(type)
-        if type is not None
-        else snapshot.in_namespace(namespace or "")
-    )
-    if type is not None and namespace is not None:
-        rows = tuple(row for row in rows if row.namespace == namespace)
-    return rows
-
-
-def global_typed_graph(
-    rows: Sequence[KnowledgeEdge],
-    *,
-    filters: KnowledgeGraphFilters = DEFAULT_FILTERS,
-    max_nodes: int = DEFAULT_GLOBAL_MAX_NODES,
-) -> KnowledgeTypedGraph:
-    """A scoped-global typed graph: the rows' endpoints, filtered, capped."""
-    unfiltered = {row.edge_id: row for row in rows}
-    edges = {key: row for key, row in unfiltered.items() if filters.shows(row)}
-    hops = _scoped_nodes(edges.values())
-    selected = edges.get(filters.selected_edge)
-    plain = replace(filters, selected_edge="")
-    pinned = "" if selected is None or plain.shows(selected) else selected.edge_id
-
-    def count_at(candidate: KnowledgeGraphFilters) -> int:
-        return len(_scoped_nodes(row for row in rows if candidate.shows(row)))
-
-    refusal = None
-    if len(hops) > max_nodes:
-        refusal = KnowledgeGraphRefusal("too_many_nodes", len(hops), max_nodes)
-        if (remedy := _weight_remedy(count_at, filters, max_nodes)) is not None:
-            refusal = replace(
-                refusal, remedy_min_weight=remedy[0], remedy_count=remedy[1]
-            )
-    return KnowledgeTypedGraph(
-        hops=MappingProxyType(hops),
-        edges=tuple(edges.values()),
-        hidden=_hidden(edges, unfiltered, filters),
-        provenance_facets=_provenance_facets(unfiltered.values(), filters),
-        refusal=refusal,
-        pinned=pinned,
-    )
 
 
 # ── layers, degree and read order ──────────────────────────────────────
@@ -340,6 +111,18 @@ def _layer_refs(
         if ref.id and ref.id != focus and ref.id not in seen:
             seen[ref.id] = KnowledgeLayerRef(ref.id, ref.title, relation)
     return tuple(seen.values())
+
+
+def _layer_ids(focus: str, neighborhood: RelatedNeighborhood) -> tuple[str, ...]:
+    """The focus's one-hop wiki-link and provenance notes: every one visible."""
+    groups = (
+        neighborhood.links,
+        neighborhood.backlinks,
+        neighborhood.sources,
+        neighborhood.derived,
+    )
+    refs = (ref.id for group in groups for ref in group)
+    return tuple(dict.fromkeys(i for i in refs if i and i != focus))
 
 
 @dataclass(frozen=True)
@@ -438,6 +221,22 @@ def read_order(
 # ── the view model ─────────────────────────────────────────────────────
 
 
+def _expanded(
+    expansion: KnowledgeExpansion | None, node_id: str = ""
+) -> dict[str, Any]:
+    """D16's fields for one node (``node_id``) or for the view (none): what
+    the expansion pass says of it; nothing when it did not run."""
+    if expansion is None:
+        return {}
+    if not node_id:
+        return {"expansions": expansion.steps, "collapses": expansion.collapses}
+    return {
+        "expanded": node_id in expansion.expanded,
+        "via": expansion.via.get(node_id),
+        "expansion": expansion.nodes.get(node_id),
+    }
+
+
 def build_view(
     typed: KnowledgeTypedGraph,
     *,
@@ -474,6 +273,8 @@ def build_view(
         provenance_facets=typed.provenance_facets,
         refusal=typed.refusal,
         pinned=typed.pinned,
+        pin_redraws=typed.pin_redraws,
+        either_kind=typed.either_kind,
         as_of=as_of,
         stale=stale,
         layers_unavailable=layers_unavailable,
@@ -503,6 +304,7 @@ def build_view(
                 degree=degree[node_id],
                 hop=hop,
                 is_focus=mode == "focus" and node_id == focus_id,
+                **_expanded(typed.expansion, node_id),
             )
         )
     placed = set(typed.hops)
@@ -523,6 +325,7 @@ def build_view(
                 degree=degree[ref.id],
                 hop=1,
                 layer_only=True,
+                **_expanded(typed.expansion, ref.id),
             )
         )
     present = {edge.type for edge in edges if edge.kind == "typed"}
@@ -542,6 +345,7 @@ def build_view(
         derived=layers.derived,
         facts_tally=batch.tally,
         facts_capped_at=batch.capped_at,
+        **_expanded(typed.expansion),
     )
 
 
@@ -556,11 +360,24 @@ def assemble_focus_view(
     facts: NoteFactsBatch | None = None,
     layers_unavailable: bool = False,
     focus_missing: bool = False,
+    expand: Sequence[str] = (),
 ) -> KnowledgeGraphView:
-    """The pure focus view: typed graph, cap, layers and facts in one call."""
+    """The pure focus view: typed graph, cap, layers, expansions and facts in
+    one call, in :func:`assemble_focus_graph`'s order."""
     typed = ego_typed_graph(
         snapshot, focus, depth=depth, filters=filters, max_nodes=max_nodes
     )
+    if typed.refusal is None:
+        typed = expanded_typed_graph(
+            snapshot,
+            typed,
+            focus,
+            depth=depth,
+            filters=filters,
+            max_nodes=max_nodes,
+            layer_ids=_layer_ids(focus, neighborhood or RelatedNeighborhood()),
+            expand=expand,
+        )
     return build_view(
         typed,
         mode="focus",
@@ -624,11 +441,13 @@ async def assemble_focus_graph(
     filters: KnowledgeGraphFilters = DEFAULT_FILTERS,
     max_nodes: int = DEFAULT_FOCUS_MAX_NODES,
     fanout_cap: int | None = None,
+    expand: Sequence[str] = (),
 ) -> KnowledgeGraphView:
-    """The focus view: the snapshot, then ``related(focus)``, then the facts.
+    """The focus view: the snapshot, then ``related(focus)``, then the
+    ``expand=`` requests against both (D16), then the facts.
 
-    A refusal — the table unreadable, the table over its bound, or the scope
-    over the cap — returns before ``related`` or any facts read.
+    A refusal — the table unreadable, the table over its bound, or the base
+    scope over the cap — returns before ``related`` or any facts read.
     """
     depth = min(max(depth, 1), MAX_DEPTH)
     scope: dict[str, Any] = {"focus_id": focus, "depth": depth}
@@ -673,6 +492,16 @@ async def assemble_focus_graph(
             logger.warning(
                 "knowledge graph: related read failed for %s", focus, exc_info=True
             )
+    typed = expanded_typed_graph(
+        state,
+        typed,
+        focus,
+        depth=depth,
+        filters=filters,
+        max_nodes=max_nodes,
+        layer_ids=_layer_ids(focus, neighborhood),
+        expand=expand,
+    )
     layers = _layers(focus, neighborhood, typed.edges)
     drawn = tuple(_typed_edge(edge) for edge in typed.edges) + layers.edges
     batch = await facts.lookup(read_order(typed, drawn), cap=fanout_cap)
