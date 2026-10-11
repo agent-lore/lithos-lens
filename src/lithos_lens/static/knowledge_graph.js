@@ -320,18 +320,30 @@
   ];
 
   // Show its neighbours for `pid` (D16), as `knowledge_graph_expand_url`
-  // writes it from the address on screen: every earlier request for the
-  // note dropped and the note appended last, the note selected, `edge`
-  // cleared and the edge it was drawn for kept as `pin`; every other pair
-  // kept, in the server's key order (`expand` in request order), `canvas`
-  // last as `queryWith` spells it — one address, one spelling.
-  function expandQuery(pid) {
+  // writes it for the view on screen: every earlier request for the note
+  // dropped and the note appended last, the note selected, `edge` cleared
+  // and the edge it was drawn for kept as `pin`; every other pair as the
+  // server spells it, in its key order (`expand` in request order), and
+  // `canvas` last as `queryWith` spells it — one address, one spelling.
+  // The view's pairs are the server's own (`data-kgraph-address`, the
+  // address it rendered, each swap's), not the address bar's, which may
+  // spell the same view otherwise (`min_weight=.70`, `colour=namespace`);
+  // the selection is the address bar's, which panel clicks move.
+  function expandQuery(pid, drawnEdge) {
     const now = new URLSearchParams(window.location.search);
-    const focus = queryValue(now, "focus");
-    const pin = queryValue(now, "edge") || queryValue(now, "pin");
+    const page = document.querySelector("[data-knowledge-graph]");
+    const address = page && typeof page.getAttribute === "function"
+      ? page.getAttribute("data-kgraph-address")
+      : null;
+    const view = address ? new URL(address, window.location.href).searchParams : now;
+    const focus = queryValue(view, "focus");
+    // A pin the view does not draw is no pin (`drawn_selection`); an
+    // `edge=` is its own pin.
+    const pinned = queryValue(now, "pin");
+    const pin = queryValue(now, "edge") || (pinned && drawnEdge(pinned) ? pinned : "");
     const requested = dict();
     const pairs = [];
-    now.forEach(function (value, key) {
+    view.forEach(function (value, key) {
       if (key === CANVAS_KEY || key === "selected" || key === "edge" || key === "pin") return;
       if (key === "expand") {
         // As the parser reads them: first occurrences, blanks and the focus
@@ -2244,7 +2256,9 @@
       const shown = current.nodes.filter(function (each) { return each.id === pid; })[0];
       const expansion = shown && shown.expansion;
       if (!expansion || expansion.state !== "available") return;
-      const href = pageUrl(expandQuery(pid));
+      const href = pageUrl(expandQuery(pid, function (edgeId) {
+        return byPid(cy.edges(".typed"), edgeId).length > 0;
+      }));
       if (!changeGraph(href, null, pid)) window.location.assign(href);
     });
 
@@ -2430,6 +2444,11 @@
       const inserted = [];
       const keep = function (node) { if (node) inserted.push(node); };
       keep(swapPart(doc, "[data-kgraph-scope]", function () {}));
+      // The answer's own address for its view: the next double click's base.
+      const page = document.querySelector("[data-knowledge-graph]");
+      const nextPage = doc.querySelector("[data-knowledge-graph]");
+      const address = nextPage ? nextPage.getAttribute("data-kgraph-address") : null;
+      if (page && address) page.setAttribute("data-kgraph-address", address);
       const source = document.querySelector("[data-knowledge-graph-payload]");
       TEXT_SECTIONS.forEach(function (selector) {
         const old = document.querySelector(selector);

@@ -1877,10 +1877,14 @@ selects, as a single click does; until Cytoscape's 250ms double-click window
 has closed any pan its panel or drawer causes waits, and the panel host lets
 the pointer through to the canvas, so neither moves the note from under the
 second press nor takes it). The double click's address is the server's
-Show its neighbours link for the address on screen: earlier requests for the
-note dropped and the note appended last in `expand=`, `selected=` the note,
-`edge` cleared and kept as `pin`, every other pair kept, all in the server's
-key order (`expand` in request order) and `canvas=full` last in full page. Over the cap, expanded, complete or the focus,
+Show its neighbours link for the view on screen: built from the view's own
+address as the server spells it (`data-kgraph-address` on the page section,
+taken from each swap's answer too — so `min_weight=.70` or an explicit
+`colour=namespace` in the address bar does not change the spelling), earlier
+requests for the note dropped and the note appended last in `expand=`,
+`selected=` the note, `edge` cleared and kept as `pin` (the address bar's
+`edge`, else its `pin` when the view draws that edge), all in the server's key
+order (`expand` in request order) and `canvas=full` last in full page. Over the cap, expanded, complete or the focus,
 it sends nothing.
 
 - **one request at a time**: starting one retires the panel request in flight;

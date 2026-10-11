@@ -63,7 +63,10 @@
 {% set drawn = view is not none and view.refusal is none and view.nodes %}
 
 {% block content %}
-  <section class="kgraph-page" data-knowledge-graph data-mode="{{ mode }}" data-kgraph-presentation="{{ params.canvas }}">
+  {#- `data-kgraph-address`: this view's own address as the URL builder spells
+      it — the script builds a double click's expansion from it (D16), so its
+      address is the panel link's, whatever spelling the request used. -#}
+  <section class="kgraph-page" data-knowledge-graph data-mode="{{ mode }}" data-kgraph-presentation="{{ params.canvas }}"{% if view is not none %} data-kgraph-address="{{ knowledge_graph_url(params) }}"{% endif %}>
     <header>
       <p class="eyebrow"><a href="/knowledge">Knowledge</a></p>
       <h1>{% if mode == "picker" %}Knowledge graph{% elif mode == "focus" %}Graph around a note{% else %}Graph by scope{% endif %}</h1>

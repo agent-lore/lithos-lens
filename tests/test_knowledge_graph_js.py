@@ -253,6 +253,10 @@ Object.entries(dom.parts || {}).forEach(([selector, part]) => {
   if (single[selector]) {
     single[selector].key = selector;
     single[selector].outerHTML = part.outer;
+    // The page section's own attributes, as rendered (its address).
+    if (selector === "[data-knowledge-graph]") {
+      Object.assign(single[selector].attributes, part.attrs);
+    }
     return;
   }
   const node = partElement(selector, part);
@@ -834,6 +838,8 @@ PART_SELECTORS: dict[str, tuple[str, str | None]] = {
     "[data-kgraph-provenance-group]": ("data-kgraph-provenance-group", None),
     "[data-knowledge-graph-payload]": ("data-knowledge-graph-payload", None),
     "[data-kgraph-graph-status]": ("data-kgraph-graph-status", None),
+    # The page section itself, for the address it carries.
+    "[data-knowledge-graph]": ("data-knowledge-graph", None),
 }
 #: The parts that are the page's text — everything a swap replaces but the
 #: payload, the panel host (its contents are compared as `panel`) and the
@@ -846,6 +852,7 @@ TEXT_SELECTORS = [
         "#kgraph-panel",
         "[data-knowledge-graph-payload]",
         "[data-kgraph-graph-status]",
+        "[data-knowledge-graph]",
     )
 ]
 _VOID = {

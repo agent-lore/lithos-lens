@@ -1346,3 +1346,38 @@ def test_a_taps_panel_lets_the_pointer_through_until_the_pair_is_over(
 
     assert tapped["panelPointer"] == "none"
     assert paired["panelPointer"] == ""
+
+
+@pytest.mark.parametrize("canvas", ["", "&canvas=full"], ids=["inline", "full-page"])
+def test_the_double_click_url_is_the_servers_spelling_of_the_view_not_the_address_bars(
+    lithos_lens_config_env: Path, canvas: str
+) -> None:
+    """`min_weight=.70` and an explicit default `colour=namespace` are this
+    very view: the double click asks for the panel link's own spelling, and
+    after a swap for the answer's."""
+    odd = f"{ROUTE}?focus={ROLLBACK}&min_weight=.70&selected={PLAN}&colour=namespace"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, odd + canvas)
+        href = _expand(page.html)
+        answer = _response(client, href)
+        # The capacity note's panel in the expanded view: its link.
+        selected = f"{ROUTE}?focus={ROLLBACK}&expand={PLAN}&min_weight=0.7"
+        then = _expand(client.get(f"{selected}&selected={CAPACITY}{canvas}").text)
+    assert href == ONE + canvas
+    assert then == TWO + canvas
+    full = {"presentation": "full"} if canvas else {}
+
+    result = _go(
+        page,
+        {href: answer},
+        [
+            "tap-node:" + PLAN,
+            "dbltap-node:" + PLAN,
+            "respond",
+            "tap-node:" + CAPACITY,
+            "dbltap-node:" + CAPACITY,
+        ],
+        **full,
+    )
+
+    assert result["fetches"] == [href, then]
