@@ -515,10 +515,22 @@ function controls() {
     href: url.href,
   };
 }
-function answer(index, response) {
+// A held body: `headers:N` lands the response with its body still to come,
+// and `body:N` delivers it — the boundary a retirement can fall inside.
+const bodies = [];
+function answer(index, response, held) {
   const call = fetches[index];
   if (!call) return;
-  call.resolve({ status: response.status, text: () => Promise.resolve(response.body) });
+  const body = held
+    ? new Promise((resolve) => { bodies[index] = () => resolve(response.body); })
+    : Promise.resolve(response.body);
+  call.resolve({ status: response.status, text: () => body });
+}
+function responseFor(index, value) {
+  const fetched = new URL(fetches[index].url, url.href);
+  const name = value || fetched.pathname + fetched.search;
+  if (!dom.responses[name]) throw new Error("no response for " + name);
+  return { status: dom.responses[name].status, body: "@" + name };
 }
 (async () => {
 for (const action of actions) {
@@ -535,11 +547,19 @@ for (const action of actions) {
     // Collapse or remove link: `attribute|href`.
     const [attribute, href] = arg.split("|");
     const link = el({ attributes: { [attribute]: "", href } });
-    link.closest = (selector) => selector.includes(attribute) ? link : null;
+    link.closest = (selector) =>
+      selector.includes(attribute) || selector === "a[href]" ? link : null;
     const event = { target: link, button: 0, ctrlKey: kind === "graph-link-ctrl",
       defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     (documentListeners.click || []).forEach((fn) => fn(event));
     marks.push({ prevented: event.defaultPrevented });
+  } else if (kind === "headers" || kind === "body") {
+    const index = arg === "" ? fetches.length - 1 : Number(arg);
+    if (kind === "headers") answer(index, responseFor(index, ""), true);
+    else if (bodies[index]) bodies[index]();
+  } else if (kind === "zoom") {
+    // The operator's own zoom, around the canvas's middle.
+    cy.zoom(Number(arg));
   } else if (kind === "respond" || kind === "status" || kind === "fail") {
     // Fetch N (default: the latest) answered: `respond:N` with the page the
     // route rendered for its URL (`respond:N=key` another of
@@ -550,12 +570,7 @@ for (const action of actions) {
     if (!fetches[index]) continue;
     if (kind === "fail") fetches[index].reject(new TypeError("Failed to fetch"));
     else if (kind === "status") answer(index, { status: Number(value), body: "" });
-    else {
-      const name = value || new URL(fetches[index].url, url.href).pathname +
-        new URL(fetches[index].url, url.href).search;
-      if (!dom.responses[name]) throw new Error("no response for " + name);
-      answer(index, { status: dom.responses[name].status, body: "@" + name });
-    }
+    else answer(index, responseFor(index, value));
   } else if (kind === "state") {
     marks.push(controls());
   } else if (kind === "slider-input" || kind === "slider-change") {
@@ -564,7 +579,9 @@ for (const action of actions) {
     slider.fire(kind === "slider-input" ? "input" : "change");
   } else if (kind === "provenance") {
     const [group, state] = arg.split("=");
-    const toggle = provenance.find((t) => t.dataset.kgraphProvenance === group);
+    // The toggles on the page now: a swap may have replaced the fieldset.
+    const toggle = many["[data-kgraph-provenance]"]
+      .find((t) => t.dataset.kgraphProvenance === group);
     toggle.checked = state === "on";
     toggle.fire("change");
   } else if (kind === "depth" || kind === "colour") {
@@ -771,6 +788,7 @@ console.log(JSON.stringify({
       badge: n.pstyle("background-image").strValue }])),
   keyMarkText: single["[data-kgraph-key-marks]"].children.map(textOf),
   controls: controls(),
+  zoom: cy.zoom(),
 }));
 })().catch((error) => {
   console.error(error && error.stack || error);

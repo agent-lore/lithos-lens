@@ -1225,22 +1225,50 @@ async function holdView(page: Page) {
   return { seen, release: () => release(), handled: () => handled };
 }
 
-/** The notes `ids` are drawn inside the usable area, or the hint says not. */
-async function inView(page: Page, ids: string[]) {
+/**
+ * How an expansion framed the note expanded and the notes it brought, by
+ * their drawn boxes (bodies and titles): whether the group fits the usable
+ * area at the readable floor and, either way, what the view did — the group
+ * wholly inside that area; or, too big for it, the floor's zoom centred on
+ * the note, the pan hint up.
+ */
+async function framed(page: Page, anchor: string, brought: string[]) {
   const g = await geometry(page);
-  const outside = await page.evaluate(
-    ([pids, usable]) => {
-      const cy = (window as any).LithosLensKnowledgeGraph.cy;
-      return (pids as string[]).filter((pid) => {
-        const at = cy.nodes().filter((n: any) => n.data("pid") === pid)[0].renderedPosition();
-        const u = usable as any;
-        return at.x < u.x1 || at.x > u.x2 || at.y < u.y1 || at.y > u.y2;
-      });
+  const shown = await page.evaluate(
+    ([pid, pids, usable]) => {
+      const graph = (window as any).LithosLensKnowledgeGraph;
+      const cy = graph.cy;
+      const pick = (ids: string[]) => cy.nodes().filter((n: any) => ids.includes(n.data("pid")));
+      const group = pick([pid as string, ...(pids as string[])]);
+      const model = group.boundingBox({ includeLabels: true, includeOverlays: false });
+      const drawn = group.renderedBoundingBox({ includeLabels: true, includeOverlays: false });
+      const note = pick([pid as string]).renderedBoundingBox({ includeLabels: true, includeOverlays: false });
+      const u = usable as any;
+      const roomW = u.x2 - u.x1 - 2 * 24;
+      const roomH = u.y2 - u.y1 - 2 * 24;
+      return {
+        fits: model.w * graph.minReadableZoom <= roomW && model.h * graph.minReadableZoom <= roomH,
+        inside: drawn.x1 >= u.x1 - 1 && drawn.x2 <= u.x2 + 1 && drawn.y1 >= u.y1 - 1 && drawn.y2 <= u.y2 + 1,
+        off: {
+          x: (note.x1 + note.x2) / 2 - (u.x1 + u.x2) / 2,
+          y: (note.y1 + note.y2) / 2 - (u.y1 + u.y2) / 2,
+        },
+        zoom: cy.zoom(),
+        floor: graph.minReadableZoom,
+      };
     },
-    [ids, g.usable] as const,
+    [anchor, brought, g.usable] as const,
   );
-  if (outside.length) expect(g.hinted).toBe(true);
-  return outside;
+  if (shown.fits) {
+    expect(shown.inside).toBe(true);
+    expect(shown.zoom).toBeGreaterThanOrEqual(shown.floor);
+  } else {
+    expect(shown.zoom).toBeCloseTo(shown.floor, 6);
+    expect(Math.abs(shown.off.x)).toBeLessThan(2);
+    expect(Math.abs(shown.off.y)).toBeLessThan(2);
+    expect(g.hinted).toBe(true);
+  }
+  return shown;
 }
 
 for (const [width, height] of [
@@ -1294,12 +1322,24 @@ for (const [width, height] of [
     unobscured(g);
     expect(g.zoom).toBeGreaterThanOrEqual(g.minReadable);
     expect(g.hinted).toBe(g.clipped);
-    const outside = await inView(page, [PLAN, CAPACITY, LEGACY]);
+    // Framed by the expansion itself, before anything else moves the view:
+    // the group fits at 1440 and 768; at 390, under the sheet, it cannot.
+    const frame = await framed(page, PLAN, [CAPACITY, LEGACY]);
+    expect(frame.fits).toBe(width >= 768);
 
     // The second: edge-only, from the capacity note's panel — dragged into
     // view first if the readable zoom left it outside.
     expect(await expansionOf(page, CAPACITY)).toEqual(["available", 0, 1]);
-    if (outside.includes(CAPACITY)) {
+    const outside = await page.evaluate(
+      ([pid, usable]) => {
+        const cy = (window as any).LithosLensKnowledgeGraph.cy;
+        const at = cy.nodes().filter((n: any) => n.data("pid") === pid)[0].renderedPosition();
+        const u = usable as any;
+        return at.x < u.x1 || at.x > u.x2 || at.y < u.y1 || at.y > u.y2;
+      },
+      [CAPACITY, g.usable] as const,
+    );
+    if (outside) {
       await page.evaluate(
         ([pid, usable]) => {
           const cy = (window as any).LithosLensKnowledgeGraph.cy;
@@ -1354,4 +1394,47 @@ test("Back over an expansion reloads that entry's exploration", async ({ page })
   await expect.poll(() => query(page).expand).toBe(PLAN);
   await canvasReady(page);
   await viewOf(page, 4, 7);
+});
+
+test("at 768px a physical double click on a note expands it in full page, its first tap's panel notwithstanding", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  // An instant pan: the move a held one would otherwise be mid-way through.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const pointOf = () =>
+    page.evaluate((pid) => {
+      const cy = (window as any).LithosLensKnowledgeGraph.cy;
+      const node = cy.nodes().filter((n: any) => n.data("pid") === pid)[0];
+      const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+      const at = node.renderedPosition();
+      return { x: box.left + at.x, y: box.top + at.y };
+    }, PLAN);
+
+  // The premise: a single click's drawer pans this note to keep it clear.
+  await page.goto(`${EXPANSION_BASE}&canvas=full`);
+  await canvasReady(page);
+  await settledLayout(page);
+  const start = await pointOf();
+  await page.mouse.click(start.x, start.y);
+  await nodePanel(page, PLAN);
+  await page.waitForTimeout(DOUBLE_CLICK_MS);
+  await settledLayout(page);
+  const panned = await pointOf();
+  expect(Math.hypot(panned.x - start.x, panned.y - start.y)).toBeGreaterThan(20);
+
+  await page.goto(`${EXPANSION_BASE}&canvas=full`);
+  await canvasReady(page);
+  await settledLayout(page);
+  const point = await pointOf();
+
+  // A human's pace: the first tap's panel lands before the second press.
+  await page.mouse.dblclick(point.x, point.y, { delay: 100 });
+  await viewOf(page, 4, 7);
+
+  expect(query(page)).toEqual({
+    focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
+  });
+  await nodePanel(page, PLAN);
+  unobscured(await geometry(page));
 });

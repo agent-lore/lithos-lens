@@ -711,6 +711,7 @@ async function shownView(page: Page) {
       nodes: graph.payload.nodes.map((n: any) => n.id).sort(),
       edges: graph.payload.edges.length,
       drawn: graph.cy.nodes().length,
+      render: document.querySelector("#kgraph-panel")!.getAttribute("data-kgraph-render"),
       expansions: graph.payload.expansions.map((s: any) => [s.id, s.state]),
       positions: Object.fromEntries(
         graph.cy.nodes().map((n: any) => [n.data("pid"), n.position()]),
@@ -794,6 +795,21 @@ test("a double click expands a note in place: one fetch, pushed after the swap, 
   await expect(page.locator(`[data-kgraph-scope] [data-kgraph-expanded="${PLAN}"]`)).toBeVisible();
   await expect(page.locator(`[data-kgraph-edges] [data-kgraph-node="${CAPACITY}"]`).first()).toBeVisible();
   await expect(page.locator(`#kgraph-panel [data-kgraph-panel-id="${PLAN}"]`)).toBeVisible();
+  // The swapped text's own panel links are live: a relation the expansion
+  // brought opens its edge panel in place, from the new render.
+  const render = await page.locator("#kgraph-panel").getAttribute("data-kgraph-render");
+  const panelRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/knowledge/graph/panel") panelRequests.push(request.url());
+  });
+  await page.locator(`[data-kgraph-edge="${SUPPORTS}"] .kgraph-edge-link`).click();
+  await expect(
+    page.locator(`#kgraph-panel [data-kgraph-panel="edge"][data-kgraph-panel-id="${SUPPORTS}"]`),
+  ).toBeVisible();
+  expect(await sameDocument(page)).toBe(true);
+  expect(panelRequests.map((u) => new URL(u).searchParams.get("render"))).toEqual([render]);
+  expect(render).not.toBe(before.render);
+  await page.locator("#kgraph-panel [data-kgraph-panel-close]").click();
   // Placed by measured titles: no label over another or under a note.
   await page.evaluate(() =>
     (window as any).LithosLensKnowledgeGraph.cy.nodes().addClass("lit"),
@@ -909,6 +925,11 @@ test("while an expansion is out the controls are disabled and a click opens noth
   await expect(page.locator('[data-kgraph-depth][value="2"]')).toBeDisabled();
   await page.waitForTimeout(DOUBLE_CLICK_MS);
   await clickNode(page, ROLLBACK);
+  // Centre on this — an ordinary link to a view built from the old one —
+  // does nothing either; the page is still this one.
+  await markDocument(page);
+  await page.locator("#kgraph-panel [data-kgraph-centre]").click();
+  expect(await sameDocument(page)).toBe(true);
   // Search still works meanwhile.
   await page.locator("[data-kgraph-search]").fill("plan");
   await expect(page.locator("[data-kgraph-search-count]")).toHaveText(/1 match/);
@@ -960,4 +981,22 @@ test("Back during an expansion reloads that entry and the late answer changes no
   const view = await shownView(page);
   expect(view.nodes).toEqual([PLAN, ROLLBACK].sort());
   expect(await pushes(page)).toEqual([]);
+});
+
+test("an operator zoomed out past the readable floor is brought back to it by an expansion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${EXPANSION_BASE}&selected=${PLAN}`);
+  await canvasReady(page);
+  await page.evaluate(() => (window as any).LithosLensKnowledgeGraph.cy.zoom(0.2));
+
+  await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+  await viewOf(page, 4);
+
+  const zoom = await page.evaluate(() => {
+    const graph = (window as any).LithosLensKnowledgeGraph;
+    return [graph.cy.zoom(), graph.minReadableZoom];
+  });
+  expect(zoom[0]).toBeGreaterThanOrEqual(zoom[1]);
 });

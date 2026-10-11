@@ -1873,18 +1873,21 @@ and "Not shown"'s remove links (`data-kgraph-expansion-remove`) — a middle,
 modified or context click stays a link — and a double click on a note whose
 `expansion.state` is `available` expands it (only when both taps hit that
 note; a pair over two targets is the second's single click; the first tap
-selects, as a single click does). The double click's address is the
-server's Show its neighbours link for the address on screen: earlier requests
-for the note dropped and the note appended last in `expand=`, `selected=` the
-note, `edge` cleared and kept as `pin`, every other pair as spelled and
-`canvas=full` last in full page. Over the cap, expanded, complete or the focus,
+selects, as a single click does, and any pan its panel or drawer causes waits
+until Cytoscape's 250ms double-click window has closed, so it cannot move the
+note from under the second tap). The double click's address is the server's
+Show its neighbours link for the address on screen: earlier requests for the
+note dropped and the note appended last in `expand=`, `selected=` the note,
+`edge` cleared and kept as `pin`, every other pair kept, all in the server's
+key order (`expand` in request order) and `canvas=full` last in full page. Over the cap, expanded, complete or the focus,
 it sends nothing.
 
 - **one request at a time**: starting one retires the panel request in flight;
   while it is out, the full-page toggle, the slider, the provenance, depth and
-  colour inputs are disabled, every intercepted link is inert, canvas taps,
-  Esc and Close do nothing, and any htmx request into the panel host is
-  cancelled at `htmx:beforeRequest`. Search, pan, zoom, the disclosures and
+  colour inputs are disabled, every intercepted link — and every other plain
+  click on a link to `/knowledge/graph` (Centre on this, a remedy or depth
+  link, the pill) — is inert, canvas taps, Esc and Close do nothing, and any
+  htmx request into the panel host is cancelled at `htmx:beforeRequest`. Search, pan, zoom, the disclosures and
   links to note pages stay live. Back, Forward or a toggle aborts and retires
   it before their own behaviour; a retired answer never commits, pushes or
   re-enables anything
@@ -1912,8 +1915,11 @@ it sends nothing.
   the focus for a new base note), on the side away from the drawn centre, ring
   by ring from the base layout's spacing, in id order, each where its body at
   the largest size and its measured title (estimated headless) clear every
-  placed note with room for an edge label, and where each labelled edge to a
-  placed note has room for its label; edge labels are then placed again. A
+  placed note with room for an edge label, and — for the first twelve rings
+  searched — where each labelled edge to a placed note has room for its
+  label; the search goes on outward until a place is clear, so no new note is
+  ever placed over another (each note of a group starts on its predecessor's
+  ring); edge labels are then placed again. A
   fresh load lays out the base notes (`via` none) as before and then places
   each applied expansion in URL order by the same rule, so it is deterministic
   for the same data, address, faces and canvas size — but a reload, Back or a
@@ -1925,8 +1931,9 @@ it sends nothing.
   changed takes its new value's colour
 - **the view**: after an expansion the expanded note and the notes it brought
   are panned into the usable area, zoomed out only as needed and never below
-  `MIN_READABLE_ZOOM` (nor in), animated unless reduced motion; the pan hint
-  says what is outside. Otherwise the selection is kept clear
+  `MIN_READABLE_ZOOM` — an operator zoomed out past it is brought back to it,
+  never further in — centred on the expanded note when they cannot fit there,
+  animated unless reduced motion; the pan hint says what is outside. Otherwise the selection is kept clear
 - **marks**: a note whose expansion would add visible notes shows "+N" over
   it, one that adds only edges between drawn notes "↔"; the key explains both
 - **the pill**: it reads the payload on the page, so it follows each swap;

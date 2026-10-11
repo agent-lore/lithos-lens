@@ -120,6 +120,9 @@
   //: How long a refit or a pan after a toggle or a panel takes, unless the
   //: operator prefers reduced motion.
   const MOTION_MS = 250;
+  //: Cytoscape's double-click window (`multiClickDebounceTime`): two taps
+  //: this close are a `dbltap`. A tap's panel moves nothing until it ends.
+  const DOUBLE_TAP_MS = 250;
   // Labels are the canvas's content: the fit that opens it may not shrink
   // them past MIN_RENDERED_FONT pixels. A graph that cannot then fit is
   // opened at that zoom on its focus (or its centre), and the pan hint says
@@ -144,9 +147,10 @@
   //: The base layout's spacing between notes: its rings', and the step an
   //: expansion's notes are placed out from the note expanded at (D16).
   const NODE_SPACING = 140;
-  //: How many rings out from that note a new one is tried on — the first
-  //: at the base layout's ring spacing, each next a note's width further —
-  //: before it takes the outermost place facing away from the graph.
+  //: Rings out from that note — the first at the base layout's ring
+  //: spacing, each next a note's width further — are searched until a place
+  //: is clear. For this many rings a place must also leave its edges'
+  //: labels room; past them, clear of every note and title is enough.
   const PLACE_RINGS = 12;
   //: The distance along a ring between the places tried.
   const PLACE_STEP = SIZE_MAX / 2;
@@ -314,23 +318,12 @@
     "provenance", "colour", "selected", "edge", "pin"
   ];
 
-  // `pair` into `pairs` where the server writes it: after every pair whose
-  // key it writes no later — a repeated `expand` after the ones before it.
-  function insertPair(pairs, pair) {
-    const rank = URL_KEYS.indexOf(pair[0]);
-    let at = 0;
-    pairs.forEach(function (other, index) {
-      const own = URL_KEYS.indexOf(other[0]);
-      if (own !== -1 && own <= rank) at = index + 1;
-    });
-    pairs.splice(at, 0, pair);
-  }
-
   // Show its neighbours for `pid` (D16), as `knowledge_graph_expand_url`
   // writes it from the address on screen: every earlier request for the
   // note dropped and the note appended last, the note selected, `edge`
   // cleared and the edge it was drawn for kept as `pin`; every other pair
-  // kept, `canvas` as `queryWith` spells it.
+  // kept, in the server's key order (`expand` in request order), `canvas`
+  // last as `queryWith` spells it — one address, one spelling.
   function expandQuery(pid) {
     const now = new URLSearchParams(window.location.search);
     const focus = queryValue(now, "focus");
@@ -347,11 +340,18 @@
       }
       pairs.push([key, value]);
     });
-    insertPair(pairs, ["expand", pid]);
-    insertPair(pairs, ["selected", pid]);
-    if (pin) insertPair(pairs, ["pin", pin]);
-    if (fullPage) pairs.push([CANVAS_KEY, "full"]);
-    return new URLSearchParams(pairs).toString();
+    pairs.push(["expand", pid], ["selected", pid]);
+    if (pin) pairs.push(["pin", pin]);
+    const rank = function (pair) {
+      const at = URL_KEYS.indexOf(pair[0]);
+      return at === -1 ? URL_KEYS.length : at;
+    };
+    // A stable sort: repeated keys keep their order.
+    const ordered = pairs.map(function (pair, index) { return [pair, index]; })
+      .sort(function (a, b) { return rank(a[0]) - rank(b[0]) || a[1] - b[1]; })
+      .map(function (entry) { return entry[0]; });
+    if (fullPage) ordered.push([CANVAS_KEY, "full"]);
+    return new URLSearchParams(ordered).toString();
   }
 
   //: Python's whitespace (`str.isspace`, what the parser's `.strip()`
@@ -669,10 +669,25 @@
 
   const GRAPH_LINKS = "a[data-kgraph-expand], a[data-kgraph-collapse], a[data-kgraph-expansion-remove]";
 
+  // Any other link to this page's graph — Centre on this, a remedy or depth
+  // link, the pill, a reload — loads a view built from the one being
+  // replaced: inert too while a request is out. Links to note pages, and
+  // a `#` jump such as Text view, stay live.
+  function graphAddress(link) {
+    const href = link.getAttribute("href") || "";
+    return href.split(/[?#]/)[0] === GRAPH_PATH;
+  }
+
   function onGraphLinkClick(event) {
     const target = event.target;
-    const link = target && typeof target.closest === "function" ? target.closest(GRAPH_LINKS) : null;
-    if (!link || event.defaultPrevented || modified(event)) return;
+    if (!target || typeof target.closest !== "function" || modified(event)) return;
+    const link = target.closest(GRAPH_LINKS);
+    if (graphRequest) {
+      const any = link || target.closest("a[href]");
+      if (any && graphAddress(any)) event.preventDefault();
+      return;
+    }
+    if (!link || event.defaultPrevented) return;
     if (changeGraph(link.getAttribute("href"), link, null)) event.preventDefault();
   }
 
@@ -1325,7 +1340,8 @@
       autounselectify: true,
       boxSelectionEnabled: false,
       minZoom: 0.2,
-      maxZoom: 3
+      maxZoom: 3,
+      multiClickDebounceTime: DOUBLE_TAP_MS
     });
 
     // ── Placement beside the note expanded (D16) ────────────────────────
@@ -1417,6 +1433,7 @@
       const away = Math.hypot(at.x - centre.x, at.y - centre.y) < 1
         ? 0
         : Math.atan2(at.y - centre.y, at.x - centre.x);
+      let firstRing = 1;
       nodes.sort(function (a, b) { return byName(a.data("pid"), b.data("pid")); })
         .forEach(function (node) {
           const title = titleSize(node);
@@ -1424,9 +1441,10 @@
             const other = edge.source().same(node) ? edge.target() : edge.source();
             return where[other.id()] ? { other: other.position(), size: edgeLabelSize(edge) } : null;
           }).filter(Boolean);
-          const clear = function (point) {
+          const clear = function (point, labelled) {
             const room = reserve(title, point, ROOM);
             if (!rooms.every(function (other) { return apart(room, other); })) return false;
+            if (!labelled) return true;
             const body = reserve(title, point, LABEL_CLEARANCE);
             // Somewhere along the edge's middle half, as `placeEndLabels`
             // slides a label along its edge.
@@ -1440,9 +1458,13 @@
               });
             });
           };
+          // Outward until a place is clear: every room placed is bounded,
+          // so a ring far enough out always has one. Each note of a group
+          // starts on the ring the one before it took — the rings inside it
+          // had no room for that one.
           let spot = null;
-          let outermost = null;
-          for (let ring = 1; ring <= PLACE_RINGS && !spot; ring += 1) {
+          for (let ring = firstRing; !spot; ring += 1) {
+            const labelled = ring - firstRing < PLACE_RINGS;
             // First as far out as the base layout's rings are apart (its
             // spacing and a note at its largest), then a note's width more.
             const radius = NODE_SPACING + SIZE_MAX * ring;
@@ -1452,12 +1474,12 @@
                 if (spot || (turn === 0 && side === -1)) return;
                 const angle = away + (side * turn * 2 * Math.PI) / steps;
                 const point = { x: at.x + radius * Math.cos(angle), y: at.y + radius * Math.sin(angle) };
-                if (turn === 0) outermost = point;
-                if (clear(point)) spot = point;
+                if (clear(point, labelled)) spot = point;
               });
             }
+            if (spot) firstRing = ring;
           }
-          node.position(spot || outermost);
+          node.position(spot);
           where[node.id()] = true;
           rooms.push(reserve(title, node.position(), ROOM));
           bodies.push(reserve(title, node.position(), LABEL_CLEARANCE));
@@ -2067,7 +2089,32 @@
     // disclosure or the pill) and the selection kept in what is left.
     // A fit still in flight is fitted again to the new geometry, not
     // stopped where it has got to.
+    // A note's first tap opens its panel at once, and in full page that
+    // panel (and the drawer it opens) pans the canvas to keep the note
+    // clear. Inside the double-click window that pan would move the note
+    // from under the second tap, which then lands beside it and is no
+    // double click (D16): until the window ends every such move is held,
+    // and the latest is made then. Held, the canvas counts as moving.
+    let tapWindowEnds = 0;
+    let heldMove = null;
+    function holdForTap(move) {
+      const wait = tapWindowEnds - Date.now();
+      if (!(wait > 0)) return false;
+      if (!heldMove) {
+        container.dataset.canvasMotion = "moving";
+        setTimeout(function () {
+          const next = heldMove;
+          heldMove = null;
+          if (!inFlight) container.dataset.canvasMotion = "still";
+          if (next) next();
+        }, wait);
+      }
+      heldMove = move;
+      return true;
+    }
+
     function geometryChanged(animate) {
+      if (holdForTap(function () { geometryChanged(true); })) return;
       cy.resize();
       if (inFlight && inFlight.fit) fitView(animate);
       else revealSelection(animate);
@@ -2125,6 +2172,7 @@
     cy.on("tap", "node", function (event) {
       // A panel action: inert while an expansion or collapse is out (D16).
       if (graphRequest) return;
+      tapWindowEnds = Date.now() + DOUBLE_TAP_MS;
       const pid = event.target.data("pid");
       const now = new URLSearchParams(window.location.search);
       // A node opened from a view drawn for an edge pins that edge, as the
@@ -2152,6 +2200,8 @@
     // nothing more than its taps did. Collapse is the panel's link.
     cy.on("dbltap", "node", function (event) {
       const node = event.target;
+      // The pair is over: what it held may move now.
+      tapWindowEnds = 0;
       if (previousTapId !== node.id()) return;
       const pid = node.data("pid");
       const shown = current.nodes.filter(function (each) { return each.id === pid; })[0];
@@ -2199,6 +2249,7 @@
       });
 
     panelMoved = function (opened) {
+      if (opened && holdForTap(function () { panelMoved(true); })) return;
       if (!opened) light(null);
       // Opened, the selection is kept clear by a pan alone (D12); closed,
       // room given back.
@@ -2374,28 +2425,28 @@
     // An expansion's notes in view (D16): the note expanded and the notes
     // it brought, panned to in the usable area from where the view is (or
     // is going) — zoomed out only as far as they need and never below
-    // MIN_READABLE_ZOOM (nor in), centred on the note when they still do
-    // not fit; the pan hint says what is outside. Answers whether it moved.
+    // MIN_READABLE_ZOOM, and in no further than that floor (an operator
+    // zoomed out past it is brought back to it); centred on the note when
+    // they still do not fit, the pan hint saying what is outside. Answers
+    // whether it moved.
     function revealNodes(nodes, animate) {
       if (!nodes.length) return false;
       const base = inFlight ? inFlight.target : { zoom: cy.zoom(), pan: cy.pan() };
-      makeRoom(base.zoom);
+      const floor = Math.max(MIN_READABLE_ZOOM, cy.minZoom());
+      const ceiling = Math.max(base.zoom, floor);
+      makeRoom(ceiling);
       const box = nodes.boundingBox();
-      const at = function (zoom, pan) {
-        return {
-          x1: zoom * box.x1 + pan.x,
-          x2: zoom * box.x2 + pan.x,
-          y1: zoom * box.y1 + pan.y,
-          y2: zoom * box.y2 + pan.y
-        };
+      const drawn = {
+        x1: base.zoom * box.x1 + base.pan.x,
+        x2: base.zoom * box.x2 + base.pan.x,
+        y1: base.zoom * box.y1 + base.pan.y,
+        y2: base.zoom * box.y2 + base.pan.y
       };
-      const drawn = at(base.zoom, base.pan);
-      if (drawn.x1 >= usable.x1 && drawn.x2 <= usable.x2 &&
+      if (base.zoom >= floor && drawn.x1 >= usable.x1 && drawn.x2 <= usable.x2 &&
           drawn.y1 >= usable.y1 && drawn.y2 <= usable.y2) return false;
       const roomW = Math.max(usable.x2 - usable.x1 - 2 * FIT_PADDING, 1);
       const roomH = Math.max(usable.y2 - usable.y1 - 2 * FIT_PADDING, 1);
-      let zoom = Math.min(base.zoom, roomW / box.w, roomH / box.h);
-      zoom = Math.max(zoom, Math.min(base.zoom, MIN_READABLE_ZOOM), cy.minZoom());
+      const zoom = Math.max(Math.min(ceiling, roomW / box.w, roomH / box.h), floor);
       let centre = centreOf(box);
       if (box.w * zoom > roomW || box.h * zoom > roomH) centre = centreOf(nodes[0].boundingBox());
       const middle = centreOf(usable);

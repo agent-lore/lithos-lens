@@ -843,3 +843,420 @@ def test_a_frame_or_a_reconnect_during_a_request_keeps_the_pill_up_after_the_swa
     assert quiet["pill"]["hidden"] is True, (
         "before the swap the capacity note was not drawn"
     )
+
+
+# ── Round 2: the gaps the review found ─────────────────────────────────
+
+
+def _note(payload: dict, like: str, **changes: Any) -> dict:
+    """A note shaped as the payload's ``like`` is, with ``changes``."""
+    note = copy.deepcopy(next(n for n in payload["nodes"] if n["id"] == like))
+    note.update(changes)
+    return note
+
+
+def _gap(a: dict[str, float], b: dict[str, float]) -> float:
+    return math.dist((a["x"], a["y"]), (b["x"], b["y"]))
+
+
+def test_while_a_request_is_out_every_other_graph_link_is_inert_but_note_links_are_not(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Centre on this, a remedy or depth link, the pill: each loads a view
+    built from the one being replaced. A note page and a `#` jump do not."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{BASE}&selected={PLAN}")
+        href = _expand(page.html)
+        centre = _href(page.html, "data-kgraph-centre")
+        answer = _response(client, href)
+    note = "/knowledge/notes/" + PLAN
+
+    result = _go(
+        page,
+        {href: answer},
+        [
+            f"graph-link:data-kgraph-expand|{href}",
+            f"graph-link:data-kgraph-centre|{centre}",
+            f"graph-link:data-kgraph-refresh-pill|{BASE}&selected={PLAN}",
+            f"graph-link:data-kgraph-node|{note}",
+            "graph-link:data-kgraph-text-link|#kgraph-text",
+            f"graph-link-ctrl:data-kgraph-centre|{centre}",
+            "respond",
+            f"graph-link:data-kgraph-centre|{centre}",
+        ],
+    )
+
+    assert [m["prevented"] for m in result["marks"]] == [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert result["fetches"] == [href]
+
+
+def test_the_double_click_url_takes_the_servers_key_order_from_any_spelling(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?min_weight=0.7&focus={ROLLBACK}")
+
+    result = _run(page, ["tap-node:" + PLAN, "dbltap-node:" + PLAN])
+
+    assert result["fetches"] == [ONE]
+
+
+def test_an_expansion_brings_an_operator_zoomed_past_the_floor_back_to_readable(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{BASE}&selected={PLAN}")
+        href = _expand(page.html)
+        answer = _response(client, href)
+
+    result = _go(
+        page,
+        {href: answer},
+        ["zoom:0.2", f"graph-link:data-kgraph-expand|{href}", "respond"],
+    )
+
+    assert result["zoom"] >= 11 / 12, "MIN_READABLE_ZOOM: 11px over a 12px label"
+
+
+def test_a_late_answer_whose_body_lands_after_retirement_changes_nothing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Retirement is the page's own guard, not the abort: the response has
+    landed, the request is retired while its body is still coming, then the
+    body arrives — and a newer request's busy state is not released by it."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{BASE}&selected={PLAN}")
+        href = _expand(page.html)
+        full = f"{href}&canvas=full"
+        answer, answer_full = _response(client, href), _response(client, full)
+
+    toggled = _go(
+        page,
+        {href: answer, full: answer_full},
+        [
+            f"graph-link:data-kgraph-expand|{href}",
+            "headers:0",
+            "toggle",
+            f"graph-link:data-kgraph-expand|{full}",
+            "body:0",
+            "state",
+            "mark",
+            "respond:1",
+        ],
+    )
+    travelled = _go(
+        page,
+        {href: answer},
+        [
+            "hash:top",
+            f"graph-link:data-kgraph-expand|{href}",
+            "headers:0",
+            "back",
+            "body:0",
+            "state",
+        ],
+    )
+
+    after_late = _states(toggled)[0]
+    assert after_late["busy"] is True, "the newer request is still out"
+    assert after_late["toggle"] is True
+    assert len(toggled["marks"][-1]["positions"]) == 2, "the late body drew nothing"
+    assert [push["url"] for push in toggled["pushes"]] == [
+        f"http://lens.test{BASE}&selected={PLAN}&canvas=full",
+        full,
+    ]
+    assert toggled["render"] == _render_of(answer_full)
+
+    assert travelled["reloads"] == [], "Back onto the same address: no reload"
+    assert travelled["pushes"] == []
+    assert travelled["render"] == page.dom["render"]
+    assert len(travelled["nodes"]) == 2
+    assert _states(travelled)[0]["busy"] is False
+
+
+def test_the_swapped_text_is_processed_and_its_new_provenance_toggles_navigate(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{BASE}&selected={PLAN}")
+        href = _expand(page.html)
+        answer = _response(client, href)
+    assert "[data-kgraph-provenance-group]" in answer["parts"]
+
+    result = _go(
+        page,
+        {href: answer},
+        [f"graph-link:data-kgraph-expand|{href}", "respond", "provenance:inferred=off"],
+    )
+
+    inserted = [s for s in TEXT_SELECTORS if s in answer["parts"]] + ["#kgraph-panel"]
+    assert sorted(k for k in result["processed"] if isinstance(k, str)) == sorted(
+        inserted
+    )
+    # The answer's own toggle, bound as it arrived: it navigates from the
+    # expanded address.
+    assert len(result["assigns"]) == 1
+    assert f"expand={PLAN}" in result["assigns"][0]
+    assert "provenance=reinforced%2Cdeclared%2Cother" in result["assigns"][0]
+
+
+def test_a_surviving_notes_size_follows_its_degree_through_expansion_and_collapse(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+        one = _response(client, ONE)
+        collapsed = _response(client, COLLAPSED)
+    expand = ["mark", "tap-node:" + PLAN, "dbltap-node:" + PLAN, "respond", "mark"]
+
+    before = _run(page)
+    expanded = _go(page, {ONE: one}, expand)
+    folded = _go(
+        page,
+        {ONE: one, COLLAPSED: collapsed},
+        [*expand, f"graph-link:data-kgraph-collapse|{COLLAPSED}", "respond", "mark"],
+    )
+
+    sized = lambda result: {n["id"]: (n["size"], n["width"]) for n in result["nodes"]}  # noqa: E731
+    assert sized(before)[PLAN] == sized(before)[ROLLBACK] == (30, 30)
+    # Degrees 7 (plan), 3 (rollback), 2 and 2: the hub at the top of the
+    # range, the focus a fifth of the way up it.
+    assert sized(expanded)[PLAN] == (42, 42)
+    assert sized(expanded)[ROLLBACK][0] == pytest.approx(18 + 24 / 5)
+    assert sized(expanded)[ROLLBACK][1] == pytest.approx(18 + 24 / 5)
+    assert sized(folded)[PLAN] == sized(folded)[ROLLBACK] == (30, 30)
+    marks = [_positions(m) for m in folded["marks"] if "positions" in m]
+    assert {pid: marks[1][pid] for pid in marks[0]} == marks[0] == marks[2]
+
+
+def test_a_fresh_load_places_and_colours_each_expansion_in_url_order(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Two steps that add notes, the second anchored on a note the first
+    added; their new values in an order opposite to their names, and the
+    payload's arrays in an order opposite to the URL's."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, ONE)
+    payload = copy.deepcopy(page.payload)
+    extra = _note(
+        payload,
+        CAPACITY,
+        id="note-x",
+        label="X note",
+        via=LEGACY,
+        namespace="alpha",
+        hop=3,
+    )
+    edge = copy.deepcopy(next(e for e in payload["edges"] if e["to"] == LEGACY))
+    edge.update(id="edge-x", **{"from": LEGACY, "to": "note-x"})
+    payload["nodes"].insert(0, extra)
+    payload["edges"].append(edge)
+    payload["expansions"].append(
+        {"id": LEGACY, "state": "applied", "added_nodes": 1, "added_edges": 1}
+    )
+
+    result = _run(page, ["mark"], payload)
+
+    at = _positions(result["marks"][0])
+    assert _gap(at["note-x"], at[LEGACY]) < _gap(at["note-x"], at[PLAN])
+    assert _gap(at["note-x"], at[LEGACY]) < _gap(at["note-x"], at[ROLLBACK])
+    assert _gap(at[CAPACITY], at[PLAN]) < _gap(at[CAPACITY], at[ROLLBACK])
+    palette = [_rgb(c) for c in result["palettes"]["nodes"]]
+    colours = _colours(result)
+    assert colours[PLAN] == palette[0], "the base's value"
+    assert colours[CAPACITY] == palette[1], "the first step's, though named after"
+    assert colours["note-x"] == palette[2], "the second step's"
+
+
+def test_a_slot_given_before_a_collapse_is_not_given_again_after_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Expand (`reports` takes slot 1), collapse, a new base value arrives
+    (`alpha` takes slot 2, not the freed-looking 1), expand again: each
+    keeps its slot — unlike a fresh load of the same view."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+        one = _response(client, ONE)
+        collapsed = _response(client, COLLAPSED)
+    fresh = _note(
+        _payload_of(collapsed),
+        PLAN,
+        id="note-fresh-alpha",
+        label="Fresh alpha note",
+        namespace="alpha",
+        via=None,
+    )
+
+    def add(payload: dict) -> None:
+        payload["nodes"].append(copy.deepcopy(fresh))
+
+    later = _with_payload(collapsed, add)
+    again = _with_payload(one, add)
+    result = _go(
+        page,
+        {ONE: one, COLLAPSED: later, "again": again},
+        [
+            "tap-node:" + PLAN,
+            "dbltap-node:" + PLAN,
+            "respond",
+            f"graph-link:data-kgraph-collapse|{COLLAPSED}",
+            "respond",
+            f"graph-link:data-kgraph-expand|{ONE}",
+            "respond:2=again",
+        ],
+    )
+    loaded = _run(page, [], _payload_of(again))
+
+    palette = [_rgb(c) for c in result["palettes"]["nodes"]]
+    live, reloaded = _colours(result), _colours(loaded)
+    assert (live[PLAN], live[CAPACITY], live["note-fresh-alpha"]) == (
+        palette[0],
+        palette[1],
+        palette[2],
+    )
+    # A fresh load ranks the base's two values by name: alpha, plans, then
+    # the expansion's reports — not the slots this page kept.
+    assert (reloaded["note-fresh-alpha"], reloaded[PLAN], reloaded[CAPACITY]) == (
+        palette[0],
+        palette[1],
+        palette[2],
+    )
+
+
+def test_unrelated_refreshed_notes_go_beside_their_own_anchor_and_removals_apply(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Expanding the capacity note, the answer also brings a new base note
+    (beside the focus), a new note of the plan's earlier expansion (beside
+    the plan) and drops the legacy note — none of them the click's."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, ONE)
+        two = _response(client, TWO)
+
+    def refresh(payload: dict) -> None:
+        payload["nodes"] = [n for n in payload["nodes"] if n["id"] != LEGACY]
+        payload["edges"] = [
+            e for e in payload["edges"] if LEGACY not in (e["from"], e["to"])
+        ]
+        payload["nodes"] += [
+            _note(
+                payload,
+                PLAN,
+                id="note-fresh-base",
+                label="Freshly linked note",
+                via=None,
+                hop=1,
+            ),
+            _note(
+                payload,
+                CAPACITY,
+                id="note-fresh-branch",
+                label="Branch note",
+                via=PLAN,
+                hop=2,
+            ),
+        ]
+
+    changed = _with_payload(two, refresh)
+    result = _go(
+        page,
+        {TWO: changed},
+        [
+            "search:fresh",
+            "mark",
+            f"graph-link:data-kgraph-expand|{TWO}",
+            "respond",
+            "mark",
+        ],
+    )
+
+    before, after = [_positions(m) for m in result["marks"] if "positions" in m]
+    assert set(after) == {
+        ROLLBACK,
+        PLAN,
+        CAPACITY,
+        "note-fresh-base",
+        "note-fresh-branch",
+    }
+    assert {pid: after[pid] for pid in (ROLLBACK, PLAN, CAPACITY)} == {
+        pid: before[pid] for pid in (ROLLBACK, PLAN, CAPACITY)
+    }
+    base, branch = after["note-fresh-base"], after["note-fresh-branch"]
+    assert _gap(base, after[ROLLBACK]) < _gap(base, after[PLAN])
+    assert _gap(base, after[ROLLBACK]) < _gap(base, after[CAPACITY])
+    assert _gap(branch, after[PLAN]) < _gap(branch, after[ROLLBACK])
+    # On a ring around its own anchor: the first is the base layout's
+    # spacing and a note at its largest out.
+    assert _gap(branch, after[PLAN]) == pytest.approx(140 + SIZE_MAX)
+    assert _gap(base, after[ROLLBACK]) == pytest.approx(140 + SIZE_MAX)
+    assert result["matched"] == ["note-fresh-base"]
+    assert result["canvas"]["dataset"]["canvasNodes"] == "5"
+
+
+def _title_box(label: str, at: dict[str, float]) -> tuple[float, float, float, float]:
+    """A note's body at the largest size and its title, as the script
+    estimates a title without a renderer (`titleSize`)."""
+    length = len(label) * 13 * 0.6
+    lines = max(1, math.ceil(length / 140))
+    width, height = min(length, 140) + 4, lines * 13 * 1.3 + 4
+    half = max(SIZE_MAX, width) / 2
+    return (
+        at["x"] - half,
+        at["x"] + half,
+        at["y"] - SIZE_MAX / 2,
+        at["y"] + SIZE_MAX / 2 + 4 + height,
+    )
+
+
+def test_many_new_notes_with_long_titles_each_get_clear_ground(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+        one = _response(client, ONE)
+    long = "Detailed design considerations and operational requirements " * 3
+
+    def crowd(payload: dict) -> None:
+        payload["nodes"] += [
+            _note(
+                payload,
+                CAPACITY,
+                id=f"note-n{index:03}",
+                label=f"Expansion note {index} {long}",
+            )
+            for index in range(60)
+        ]
+
+    result = _go(
+        page,
+        {ONE: _with_payload(one, crowd)},
+        ["tap-node:" + PLAN, "dbltap-node:" + PLAN, "respond", "mark"],
+    )
+
+    at = _positions(result["marks"][0])
+    labels = {n["id"]: n["label"] for n in result["nodes"]}
+    new = [pid for pid in at if pid not in (ROLLBACK, PLAN)]
+    assert len(new) == 62
+    boxes = {pid: _title_box(labels[pid], at[pid]) for pid in at}
+    overlaps = [
+        (a, b)
+        for a in new
+        for b in boxes
+        if a < b or b in (ROLLBACK, PLAN)
+        if a != b
+        and not (
+            boxes[a][1] <= boxes[b][0]
+            or boxes[b][1] <= boxes[a][0]
+            or boxes[a][3] <= boxes[b][2]
+            or boxes[b][3] <= boxes[a][2]
+        )
+    ]
+    assert overlaps == []
