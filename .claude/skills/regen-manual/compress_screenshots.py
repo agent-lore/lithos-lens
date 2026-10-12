@@ -19,7 +19,9 @@ import sys
 
 from PIL import Image
 
-SHOTS = pathlib.Path(__file__).resolve().parents[3] / "docs" / "user-manual" / "screenshots"
+SHOTS = (
+    pathlib.Path(__file__).resolve().parents[3] / "docs" / "user-manual" / "screenshots"
+)
 
 
 def main() -> int:
@@ -28,7 +30,9 @@ def main() -> int:
         before = path.stat().st_size
         image = Image.open(path).convert("RGB")
         palette = image.quantize(
-            colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG
+            colors=256,
+            method=Image.Quantize.MEDIANCUT,
+            dither=Image.Dither.FLOYDSTEINBERG,
         )
         palette.save(path, optimize=True)
         after = path.stat().st_size
