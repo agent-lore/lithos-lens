@@ -1,7 +1,7 @@
 # Lithos Lens — Roadmap
 
-Version: 1.6.0
-Date: 2026-10-05
+Version: 1.7.0
+Date: 2026-10-12
 Status: Active
 
 This is the only document that tracks milestone sequence and status. It was
@@ -77,6 +77,33 @@ dependency edge — every write a no-JS form POST answered by a page rendered
 from fresh reads, with a receipt naming what the write unblocked, re-blocked
 or stranded. Removing an edge was cut (2026-10-05) and is done outside Lens.
 
+**Lens 0.6.0** adds **K2**, the knowledge graph view. `/knowledge/graph` has a
+complete server-rendered text baseline and a Cytoscape canvas drawn from the
+same payload. It offers:
+
+- a **focus** (ego-graph) mode, reached from note pages;
+- a **scoped global** mode by edge type and/or namespace;
+- a **scope picker** with live facets, in place of any unscoped render;
+- `?type=contradicts` as the contradictions queue.
+
+How it works:
+
+- **Edges:** one server-side edge-table snapshot (`lithos_edge_list`, patched
+  from `edge.upserted`) serves every graph read.
+- **Notes:** titles and facts come from a capped, cached `lithos_read` fan-out
+  patched from `note.*` events. Endpoints whose note is gone draw as ghosts.
+- **Panels:** node and edge panels show an inferred edge's rationale, and a
+  contradiction's two notes side by side.
+- **Entry points:** note pages link into the graph, and each edge has its own
+  link.
+- **Refresh:** a knowledge event scope feeds a "graph changed — refresh" pill.
+- **After first use** (amendment 2026-10-10): a note can be expanded in place.
+  Its neighbours join the picture beside it, nothing drawn moves, and the URL
+  carries the expansions. The canvas can also fill the page.
+
+There is still no knowledge write, no salience and no centrality overlay. A
+refused expansion offers no weight remedy (deferred, 2026-10-10).
+
 `docs/SPECIFICATION.md` describes this state precisely, and is the document to
 update when behavior changes.
 
@@ -102,7 +129,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 | 3 | **T2** | Tasks | Task relationship graphs: graph pages, exploration mode, side panel, mini-graph | **shipped** | [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md) | 0.4.0 |
 | 3b | **T2b** | Tasks | Operational insights: planning view rebase, findings feed, operator ergonomics | planned | — | 0.4.x |
 | 4 | **T3** | Tasks | Curated write actions | **shipped** | [t3-curated-write-actions.md](./prd/t3-curated-write-actions.md) | 0.5.0 |
-| 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | **next** (PRD 2026-10-05) | [k2-knowledge-graph-view.md](./prd/k2-knowledge-graph-view.md) | 0.6.0 |
+| 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | **shipped** | [k2-knowledge-graph-view.md](./prd/k2-knowledge-graph-view.md) | 0.6.0 |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
 | 7 | **X1** | Both | LLM finding-curation + desktop notifications | planned | — | — |
 | 8 | **K4** | Knowledge | Feed, feedback, cited-by panel | planned | — | — |
@@ -252,7 +279,7 @@ tool existing upstream, not by a Lens action. Create's request-id
 de-duplication is in memory and forgotten on restart (SPECIFICATION §10).
 Nothing else from the milestone remains open.
 
-### K2 — Knowledge Graph View — NEXT
+### K2 — Knowledge Graph View — SHIPPED in 0.6.0
 
 Brought forward on 2026-10-05: with T3 shipped, Dave judged the task surface
 good enough for now and the knowledge surface the place to spend October's
@@ -281,6 +308,22 @@ Amended 2026-10-10 after first use (PRD D16–D17, slices S8–S10): expand a
 note in place — its neighbours join the picture beside it, nothing drawn
 moves, the URL carries the expansions — and a full-page canvas for walking
 the graph; still no unscoped render.
+
+K2 landed in ten slices, 2026-10-07 → 2026-10-12:
+
+- the seven planned slices: PRs #127, #128, #129, #130, #131, #132 and #135;
+- the three amendment slices: #137, #139 and #140;
+- the amendment itself and its refinements, in #134, #136 and #138.
+
+`docs/SPECIFICATION.md` §5.7 and §5.8 describe the shipped behavior.
+
+One piece was cut at the brief review for slice S8 (2026-10-10; PRD D16): a
+refused expansion offers no weight remedy. A remedy that still reaches the
+expansion means re-running the base view and every earlier expansion at each
+candidate weight, which is a second search. That case is rare: degree median
+4, p90 9, against a cap of 250. The weight control and the remove link remain
+the ways out. Lithos task `81805874` tracks the remedy. Nothing else from the
+milestone remains open.
 
 ### K3 — Cognitive Search + Node Stats
 

@@ -1,8 +1,8 @@
 # Lithos Lens - Specification
 
-Version: 0.5.0  
-Date: 2026-10-05  
-Status: Aligned with Implementation (T1, K1, T2 and T3 shipped)
+Version: 0.6.0  
+Date: 2026-10-12  
+Status: Aligned with Implementation (T1, K1, T2, T3 and K2 shipped)
 
 ## 1. Purpose
 
@@ -3663,7 +3663,6 @@ The following requirement areas are not yet implemented in the current state:
   outside Lens with `lithos_task_edge_delete`. Create's de-duplication is in
   memory only: there is no lookup of `metadata.lens_request_id` in Lithos, so
   a restart forgets the request ids it had seen (§5.15, Create).
-- knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)
 - archive-backed file serving and in-browser document viewing
@@ -3674,25 +3673,40 @@ The following requirement areas are not yet implemented in the current state:
 - the planning view rebase, findings feed and operator ergonomics (T2b) —
   one piece of it is live, the Gates section's PR reconciliation state (§5.3)
 
-One gap is narrower than a milestone and tracked as a task:
+Two gaps are narrower than a milestone and are each tracked as a task:
 
-- the fake↔real contract matrix runs manually against a live server rather
-  than on a schedule against a seeded one
+- The fake↔real contract matrix runs manually against a live server rather
+  than on a schedule against a seeded one.
+- A refused graph expansion offers no weight remedy (§5.7, Knowledge graph
+  expansion). Only the over-cap base view offers depth and weight remedies.
+  K2 deferred this at the brief review for slice S8 (2026-10-10, PRD D16), and
+  Lithos task `81805874` tracks it.
 
 This belongs to a future milestone and should not be assumed to exist merely
 because they are described in `docs/REQUIREMENTS.md`.
 
 ## 11. Compatibility Statement
 
-This specification describes the behavior of Lithos Lens `0.5.0` as currently
-implemented in this repository — the 0.1.0 foundation, the **T1** graph-native
-operator view and **K1** knowledge note view and search of 0.3.0, the **T2**
-task relationship graphs of 0.4.0 (§5.10–§5.12, §5.6.1, §5.6.2), and the
-**T3** curated write actions: the write posture, the operator identity and its
-guard (§5.13, §5.1), the write-refusal copy (§5.14), and the write funnel with
-its receipts and the five actions it carries — Complete and Proceed anyway,
-Reopen, Cancel, Create and Add a dependency (§5.15). Removing an edge is the
-one piece of the T3 contract not shipped (§10).
+This specification describes the behavior of Lithos Lens `0.6.0` as currently
+implemented in this repository. That covers:
+
+- the 0.1.0 foundation;
+- from 0.3.0, the **T1** graph-native operator view and the **K1** knowledge
+  note view and search;
+- from 0.4.0, the **T2** task relationship graphs (§5.10–§5.12, §5.6.1,
+  §5.6.2);
+- from 0.5.0, the **T3** curated write actions (§5.13–§5.15, §5.1);
+- from 0.6.0, the **K2** knowledge graph view (§5.7):
+  - the edge-table snapshot and the note facts cache;
+  - `/knowledge/graph`, with its text baseline, scope picker, scoped global
+    mode and canvas;
+  - the node and edge panels;
+  - the note-page entry points;
+  - expansion in place and the full-page canvas;
+  - the knowledge event scope and `/knowledge/events` (§5.8).
+
+Two pieces of these milestones' contracts are not shipped (§10): removing a
+dependency edge (T3), and a refused expansion's weight remedy (K2).
 
 If the implementation and this document diverge, the implementation should be
 treated as authoritative in the short term and this specification should be
