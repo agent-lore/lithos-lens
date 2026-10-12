@@ -15,8 +15,11 @@ import * as path from "node:path";
  * harness (`tests/test_knowledge_graph_js.py`) pins the URLs the toggle
  * writes; `tests/test_knowledge_graph_full_page.py` the server's half.
  *
- * S9 (expansion in place) has not landed: when it does, it owns the combined
- * expansion/full-page checks (PRD slice 9).
+ * S9 (expansion in place, D16) landed after this slice, so the combined
+ * checks are here, at the end: two expansions in full page at each width,
+ * with the drawer or sheet open and the toggle disabled while a request is
+ * out, then the same view toggled inline; captures go to
+ * `e2e/artifacts/knowledge-graph-expanded-*`.
  *
  * Read-only against the default fake server: nothing here writes.
  */
@@ -1162,5 +1165,374 @@ for (const [width, height] of [
     drawer.x);
     expect(cut).toBe(0);
     unobscured(await geometry(page));
+  });
+}
+
+// ── Expansion in full page and inline (K2 S9 with S10) ─────────────────
+//
+// The demo set at `min_weight=0.7` around the rollback note: the plan's
+// neighbours add the capacity and legacy notes, then the capacity note's
+// add only their `contradicts` edge (the payload is checked for both).
+
+const EXPANSION_BASE = `/knowledge/graph?focus=${ROLLBACK}&min_weight=0.7`;
+//: Past Cytoscape's double-click window: two single clicks, not a double.
+const DOUBLE_CLICK_MS = 400;
+
+async function viewOf(page: Page, nodes: number, edges: number) {
+  await page.waitForFunction(
+    ([n, e]) => {
+      const graph = (window as any).LithosLensKnowledgeGraph;
+      return graph && !graph.busy() && graph.payload.nodes.length === n &&
+        graph.payload.edges.length === e;
+    },
+    [nodes, edges] as const,
+  );
+  await settledLayout(page);
+}
+
+/**
+ * The window still shows the stage as full page frames it: the document
+ * not scrolled, the toolbar's top and the selected note on screen — an
+ * expansion committed in place moves the canvas's view, never the page.
+ */
+async function inWindow(page: Page) {
+  const shown = await page.evaluate(() => {
+    const cy = (window as any).LithosLensKnowledgeGraph.cy;
+    const canvas = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+    const toolbar = document.querySelector("[data-kgraph-toolbar]")!.getBoundingClientRect();
+    const picked = cy.elements(".picked");
+    const at = picked.length ? picked.renderedBoundingBox() : null;
+    return {
+      scrollY: window.scrollY,
+      toolbarTop: toolbar.top,
+      note: at && { top: canvas.top + at.y1, bottom: canvas.top + at.y2 },
+      height: window.innerHeight,
+    };
+  });
+  expect(shown.scrollY).toBe(0);
+  expect(shown.toolbarTop).toBeGreaterThanOrEqual(0);
+  expect(shown.note).not.toBeNull();
+  expect(shown.note!.top).toBeGreaterThanOrEqual(0);
+  expect(shown.note!.bottom).toBeLessThanOrEqual(shown.height);
+}
+
+async function expansionOf(page: Page, id: string) {
+  return page.evaluate(
+    (pid) => {
+      const node = (window as any).LithosLensKnowledgeGraph.payload.nodes.find(
+        (n: any) => n.id === pid,
+      );
+      return [node.expansion.state, node.undrawn_nodes, node.undrawn_edges];
+    },
+    id,
+  );
+}
+
+/** Hold the next expansion fetch of the page route, until released. */
+async function holdView(page: Page) {
+  let intercepted!: () => void;
+  let release!: () => void;
+  const seen = new Promise<void>((resolve) => (intercepted = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let handled: Promise<void> = Promise.resolve();
+  await page.route(
+    (url) => url.pathname === "/knowledge/graph" && url.search.includes("expand="),
+    (route) => {
+      if (route.request().resourceType() !== "fetch") return route.continue();
+      handled = (async () => {
+        intercepted();
+        await released;
+        await route.continue().catch(() => undefined);
+      })();
+      return handled;
+    },
+    { times: 1 },
+  );
+  return { seen, release: () => release(), handled: () => handled };
+}
+
+/**
+ * How an expansion framed the note expanded and the notes it brought, by
+ * their drawn boxes (bodies and titles): whether the group fits the usable
+ * area at the readable floor and, either way, what the view did — the group
+ * wholly inside that area; or, too big for it, the floor's zoom centred on
+ * the note, the pan hint up.
+ */
+async function framed(page: Page, anchor: string, brought: string[]) {
+  const g = await geometry(page);
+  const shown = await page.evaluate(
+    ([pid, pids, usable]) => {
+      const graph = (window as any).LithosLensKnowledgeGraph;
+      const cy = graph.cy;
+      const pick = (ids: string[]) => cy.nodes().filter((n: any) => ids.includes(n.data("pid")));
+      const group = pick([pid as string, ...(pids as string[])]);
+      const model = group.boundingBox({ includeLabels: true, includeOverlays: false });
+      const drawn = group.renderedBoundingBox({ includeLabels: true, includeOverlays: false });
+      const note = pick([pid as string]).renderedBoundingBox({ includeLabels: true, includeOverlays: false });
+      const u = usable as any;
+      const roomW = u.x2 - u.x1 - 2 * 24;
+      const roomH = u.y2 - u.y1 - 2 * 24;
+      return {
+        fits: model.w * graph.minReadableZoom <= roomW && model.h * graph.minReadableZoom <= roomH,
+        inside: drawn.x1 >= u.x1 - 1 && drawn.x2 <= u.x2 + 1 && drawn.y1 >= u.y1 - 1 && drawn.y2 <= u.y2 + 1,
+        off: {
+          x: (note.x1 + note.x2) / 2 - (u.x1 + u.x2) / 2,
+          y: (note.y1 + note.y2) / 2 - (u.y1 + u.y2) / 2,
+        },
+        zoom: cy.zoom(),
+        floor: graph.minReadableZoom,
+      };
+    },
+    [anchor, brought, g.usable] as const,
+  );
+  if (shown.fits) {
+    expect(shown.inside).toBe(true);
+    expect(shown.zoom).toBeGreaterThanOrEqual(shown.floor);
+  } else {
+    expect(shown.zoom).toBeCloseTo(shown.floor, 6);
+    expect(Math.abs(shown.off.x)).toBeLessThan(2);
+    expect(Math.abs(shown.off.y)).toBeLessThan(2);
+    expect(g.hinted).toBe(true);
+  }
+  return shown;
+}
+
+for (const [width, height] of [
+  [1440, 900],
+  [768, 1024],
+  [390, 844],
+] as const) {
+  test(`at ${width}px two expansions in full page with the ${width >= 768 ? "drawer" : "sheet"} open, then inline`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`${EXPANSION_BASE}&canvas=full`);
+    await canvasReady(page);
+    await markDocument(page);
+    expect(await expansionOf(page, PLAN)).toEqual(["available", 2, 4]);
+    const base = await positions(page);
+
+    // The first: the plan's panel in the drawer or sheet, its link held so
+    // the busy page can be seen — the toggle off, the disclosures and the
+    // canvas still live.
+    await clickNode(page, PLAN);
+    await nodePanel(page, PLAN);
+    const held = await holdView(page);
+    await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+    await held.seen;
+    await expect(page.locator("[data-kgraph-full-toggle]")).toBeDisabled();
+    await expect(page.locator("[data-kgraph-key-toggle]")).toBeEnabled();
+    await page.locator("[data-kgraph-full-toggle]").click({ force: true });
+    expect(await isFull(page)).toBe(true);
+    held.release();
+    await held.handled();
+    await viewOf(page, 4, 7);
+    await inWindow(page);
+    await expect(page.locator("[data-kgraph-full-toggle]")).toBeEnabled();
+    expect(query(page)).toEqual({
+      focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
+    });
+    expect(await sameDocument(page)).toBe(true);
+    let now = await positions(page);
+    expect(now.filter(([pid]: [string]) => pid === PLAN || pid === ROLLBACK)).toEqual(base);
+    // Every address the swapped text and panel carry keeps the mode.
+    const stale = await page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll("[data-knowledge-graph] [href^='/knowledge/graph'], [data-knowledge-graph] [hx-get]"),
+      )
+        .flatMap((el) => ["href", "hx-get"].map((a) => el.getAttribute(a)))
+        .filter((v): v is string => !!v && v.startsWith("/knowledge/graph") && !v.includes("canvas=full")),
+    );
+    expect(stale).toEqual([]);
+    let g = await geometry(page);
+    unobscured(g);
+    expect(g.zoom).toBeGreaterThanOrEqual(g.minReadable);
+    expect(g.hinted).toBe(g.clipped);
+    // Framed by the expansion itself, before anything else moves the view:
+    // the group fits at 1440 and 768; at 390, under the sheet, it cannot.
+    const frame = await framed(page, PLAN, [CAPACITY, LEGACY]);
+    expect(frame.fits).toBe(width >= 768);
+
+    // The second: edge-only, from the capacity note's panel — dragged into
+    // view first if the readable zoom left it outside.
+    expect(await expansionOf(page, CAPACITY)).toEqual(["available", 0, 1]);
+    const outside = await page.evaluate(
+      ([pid, usable]) => {
+        const cy = (window as any).LithosLensKnowledgeGraph.cy;
+        const at = cy.nodes().filter((n: any) => n.data("pid") === pid)[0].renderedPosition();
+        const u = usable as any;
+        return at.x < u.x1 || at.x > u.x2 || at.y < u.y1 || at.y > u.y2;
+      },
+      [CAPACITY, g.usable] as const,
+    );
+    if (outside) {
+      await page.evaluate(
+        ([pid, usable]) => {
+          const cy = (window as any).LithosLensKnowledgeGraph.cy;
+          const at = cy.nodes().filter((n: any) => n.data("pid") === pid)[0].renderedPosition();
+          const u = usable as any;
+          cy.panBy({ x: (u.x1 + u.x2) / 2 - at.x, y: (u.y1 + u.y2) / 2 - at.y });
+        },
+        [CAPACITY, g.usable] as const,
+      );
+    }
+    await page.waitForTimeout(DOUBLE_CLICK_MS);
+    await clickNode(page, CAPACITY);
+    await nodePanel(page, CAPACITY);
+    const expanded = await positions(page);
+    await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+    await viewOf(page, 4, 8);
+    await inWindow(page);
+    now = await positions(page);
+    expect(now).toEqual(expanded);
+    await nodePanel(page, CAPACITY);
+    g = await geometry(page);
+    unobscured(g);
+    expect(g.zoom).toBeGreaterThanOrEqual(g.minReadable);
+    expect(g.hinted).toBe(g.clipped);
+    expect(g.scrollWidth).toBeLessThanOrEqual(g.innerWidth);
+    await capture(page, `knowledge-graph-expanded-full-${width}`, false);
+
+    // Inline: the same view, no node moved.
+    await toggle(page);
+    expect(await isFull(page)).toBe(false);
+    expect(query(page).canvas).toBeUndefined();
+    expect(await positions(page)).toEqual(now);
+    g = await geometry(page);
+    expect(g.zoom).toBeGreaterThanOrEqual(g.minReadable);
+    await capture(page, `knowledge-graph-expanded-inline-${width}`, true);
+  });
+}
+
+test("following Text view while an expansion is out lets it commit", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${EXPANSION_BASE}&selected=${PLAN}&canvas=full`);
+  await canvasReady(page);
+  const held = await holdView(page);
+  await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+  await held.seen;
+  const busy = () => page.evaluate(() => (window as any).LithosLensKnowledgeGraph.busy());
+  expect(await busy()).toBe(true);
+
+  // A `#` jump within the page — its `popstate` is not a Back or Forward.
+  await page.locator("[data-kgraph-text-link]").click();
+  await expect.poll(() => new URL(page.url()).hash).toBe("#kgraph-text");
+  expect(await busy()).toBe(true);
+
+  held.release();
+  await held.handled();
+  await viewOf(page, 4, 7);
+  expect(query(page)).toEqual({
+    focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
+  });
+  await expect(page.locator("[data-kgraph-graph-status]")).toBeHidden();
+});
+
+test("Back over an expansion reloads that entry's exploration", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${EXPANSION_BASE}&selected=${PLAN}&canvas=full`);
+  await canvasReady(page);
+  await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+  await viewOf(page, 4, 7);
+
+  await page.goBack();
+  await expect.poll(() => query(page)).toEqual({
+    focus: ROLLBACK, min_weight: "0.7", selected: PLAN, canvas: "full",
+  });
+  await canvasReady(page);
+  expect(await isFull(page)).toBe(true);
+  await page.goForward();
+  await expect.poll(() => query(page).expand).toBe(PLAN);
+  await canvasReady(page);
+  await viewOf(page, 4, 7);
+});
+
+// A physical double click, with the first tap's panel swapped in BETWEEN the
+// two presses — its answer served at once from a copy fetched beforehand,
+// and the swap awaited before the second press, which the page records — so
+// the race does not depend on the server's speed. At 768px that panel's
+// drawer would pan the note away; at 1440px, with the note dragged under
+// where the drawer opens, the drawer itself would take the second press.
+for (const race of [
+  { name: "the drawer's pan", width: 768, height: 1024, at: null },
+  { name: "the drawer over the note", width: 1440, height: 900, at: { x: 1300, y: 400 } },
+] as const) {
+  test(`a physical double click in full page expands the note despite ${race.name}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: race.width, height: race.height });
+    // An instant move: what a held pan would otherwise be part-way through.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`${EXPANSION_BASE}&canvas=full`);
+    await canvasReady(page);
+    await settledLayout(page);
+    const pointOf = () =>
+      page.evaluate((pid) => {
+        const cy = (window as any).LithosLensKnowledgeGraph.cy;
+        const node = cy.nodes().filter((n: any) => n.data("pid") === pid)[0];
+        const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+        const at = node.renderedPosition();
+        return { x: box.left + at.x, y: box.top + at.y };
+      }, PLAN);
+    if (race.at) {
+      // The operator's own drag: the note where the drawer will open.
+      const target = race.at;
+      await page.evaluate(
+        ([pid, to]) => {
+          const cy = (window as any).LithosLensKnowledgeGraph.cy;
+          const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+          const at = cy.nodes().filter((n: any) => n.data("pid") === pid)[0].renderedPosition();
+          const t = to as { x: number; y: number };
+          cy.panBy({ x: t.x - box.left - at.x, y: t.y - box.top - at.y });
+        },
+        [PLAN, target] as const,
+      );
+    }
+    const point = await pointOf();
+    const render = await page.locator("#kgraph-panel").getAttribute("data-kgraph-render");
+    const panelUrl =
+      `/knowledge/graph/panel?focus=${ROLLBACK}&min_weight=0.7&selected=${PLAN}` +
+      `&canvas=full&render=${render}`;
+    const copy = await page.request.get(panelUrl);
+    expect(copy.ok()).toBe(true);
+    const body = await copy.text();
+    await page.route(
+      (url) => url.pathname === "/knowledge/graph/panel",
+      (route) => route.fulfill({ status: 200, contentType: "text/html", body }),
+      { times: 1 },
+    );
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__presses = [];
+      w.__swapped = 0;
+      document.addEventListener("pointerdown", () => w.__presses.push(performance.now()), true);
+      document.addEventListener("htmx:afterSwap", () => {
+        if (!w.__swapped) w.__swapped = performance.now();
+      });
+    });
+
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForFunction(() => (window as any).__swapped > 0);
+    await page.mouse.down();
+    await page.mouse.up();
+
+    const timing = await page.evaluate(() => {
+      const w = window as any;
+      return { presses: w.__presses as number[], swapped: w.__swapped as number };
+    });
+    // The barrier held: the panel was in before the second press, and the
+    // pair stayed inside Cytoscape's 250ms double-click window.
+    expect(timing.presses).toHaveLength(2);
+    expect(timing.swapped).toBeGreaterThan(timing.presses[0]);
+    expect(timing.swapped).toBeLessThan(timing.presses[1]);
+    expect(timing.presses[1] - timing.presses[0]).toBeLessThan(250);
+    await viewOf(page, 4, 7);
+    expect(query(page)).toEqual({
+      focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
+    });
+    await nodePanel(page, PLAN);
   });
 }

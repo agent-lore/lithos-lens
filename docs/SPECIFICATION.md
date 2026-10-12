@@ -1859,8 +1859,111 @@ reads nothing:
   assembles the whole view from the latest available snapshot, layers and
   facts, so unrelated elements may change too; warm caches still read the
   focus's `lithos_related`, and an expired snapshot or stale facts are read
-  again. The canvas draws an expanded payload as any other, laid out once on
-  load (in-place expansion is S9)
+  again. On a drawn page the canvas swaps the new view in place
+  (Knowledge graph expansion canvas, below); without the script each link is
+  an ordinary page load
+- **over the cap**: the panel's reason ends with "reload to check again", a
+  plain link to this view with the note selected — eligibility is the render's,
+  and the server rechecks every request
+
+**Knowledge graph expansion canvas** (K2 S9, D16). On a drawn focus page
+`knowledge_graph.js` intercepts a plain left click on Show its neighbours
+(`data-kgraph-expand`), Collapse (`data-kgraph-collapse`) and the scope line's
+and "Not shown"'s remove links (`data-kgraph-expansion-remove`) — a middle,
+modified or context click stays a link — and a double click on a note whose
+`expansion.state` is `available` expands it (only when both taps hit that
+note; a pair over two targets is the second's single click; the first tap
+selects, as a single click does; until Cytoscape's 250ms double-click window
+has closed any pan its panel or drawer causes waits, and a panel that opens
+over the very note tapped stays out of sight until then, so neither moves the
+note from under the second press nor takes it — a panel opened anywhere else
+is live at once, its links clickable as soon as they show). The double click's address is the server's
+Show its neighbours link for the view on screen: built from the view's own
+address as the server spells it (`data-kgraph-address` on the page section,
+taken from each swap's answer too — so `min_weight=.70` or an explicit
+`colour=namespace` in the address bar does not change the spelling), earlier
+requests for the note dropped and the note appended last in `expand=`,
+`selected=` the note, `edge` cleared and kept as `pin` (the address bar's
+`edge`, else its `pin`, and only when the view draws that typed edge), all in the server's key
+order (`expand` in request order) and `canvas=full` last in full page. The
+view's pairs are kept exactly as the server encoded them, and the added ones
+are encoded as its `urlencode` does (`quote_plus`: `~` kept, `*` as `%2A`, a
+space as `+`), so the address is the panel link's to the character. Over the cap, expanded, complete or the focus,
+it sends nothing.
+
+- **one request at a time**: starting one retires the panel request in flight;
+  while it is out, the full-page toggle, the slider, the provenance, depth and
+  colour inputs are disabled, every intercepted link — and every other plain
+  click on a link resolving to `/knowledge/graph` on this origin (Centre on
+  this, a remedy or depth link, the pill's full address) — is inert, a `#`
+  jump such as Text view excepted, canvas taps, Esc and Close do nothing, and any
+  htmx request into the panel host is cancelled at `htmx:beforeRequest`. Search, pan, zoom, the disclosures and
+  links to note pages stay live. Back, Forward or a toggle aborts and retires
+  it before their own behaviour; a retired answer never commits, pushes or
+  re-enables anything. Following a `#` jump such as Text view is not a Back
+  or Forward, though the browser announces its new entry with a `popstate`
+  too: the request goes on and its answer commits
+- **the fetch**: `GET /knowledge/graph?<new query>` itself. Valid only when it
+  is a 200 whose `[data-knowledge-graph-payload]` parses as a focus view with
+  no `refusal` and some nodes, whose notes and edges are each a record with
+  an id of its own, every edge's ends among its notes and every value the
+  canvas, key and toolbar read present, of the kind and in the range the
+  server writes it (counts whole and never negative, states one of their
+  names, the depth 1 or 2 with a would-be count for each depth, the
+  threshold within [0, 1], the provenance groups a non-empty list of known
+  groups, each once), and whose `#kgraph-panel` carries a non-empty `data-kgraph-render`
+  — all checked, and the canvas's elements built, before anything on the
+  page changes. An answer whose elements cannot be built gives back the
+  colour slots its values took
+  Anything else — offline (no payload), a malformed payload, a whole-view
+  refusal, the render cap's 503, any other status, a network error — leaves
+  the canvas, text, panel and address as they were, gives the controls back,
+  and says why under the toolbar's buttons ("The graph was not changed: …")
+  with a plain link that loads the requested address. A view whose own
+  expansion was refused is valid and commits
+- **the commit**, one synchronous step: the scope line, the legend, focus,
+  relations, layers, missing and "Not shown" sections (as the answer has
+  them), the payload, the panel host's contents and render id, the toolbar's
+  unresolved count and provenance fieldset are the answer's (htmx processes
+  each); the full-page arrangement is kept; then the canvas is diffed by
+  persistent note and edge id (element ids minted once per page, never payload
+  positions): removed, updated (labels, sizes from the new degrees, colours,
+  marks) or added, unrelated refreshed changes included; the controls, key,
+  search, depth counts and hidden count follow; only then is the address
+  pushed and the selection lit from it. The focus goes to the new panel's
+  heading. Should the commit nonetheless fail part way, the page's own
+  address — not yet pushed — is reloaded, so no half-swapped view stays
+- **positions**: every surviving note keeps its model position. New notes are
+  placed beside their anchor (the expanded note, a freshness addition's `via`,
+  the focus for a new base note), only on the side away from the drawn centre
+  (within a quarter turn of the line out through the anchor; any side for an
+  anchor at the centre), ring by ring from the base layout's spacing, a ring
+  whose outward side has no room giving way to the next, in id order, each where its body at
+  the largest size and its measured title (estimated headless) clear every
+  placed note with room for an edge label, and — for the first twelve rings
+  searched — where each labelled edge to a placed note has room for its
+  label; the search goes on outward until a place is clear, so no new note is
+  ever placed over another (each note of a group starts on its predecessor's
+  ring); edge labels are then placed again. A
+  fresh load lays out the base notes (`via` none) as before and then places
+  each applied expansion in URL order by the same rule, so it is deterministic
+  for the same data, address, faces and canvas size — but a reload, Back or a
+  shared URL restores the exploration, not the live coordinates
+- **colours**: base values take slots by frequency (ties by name), then each
+  applied expansion's new values in URL order, ties by name; a swap's new
+  values take unused slots the same way; a slot is kept for the page's
+  lifetime through collapses, past the palette the neutral; a note whose value
+  changed takes its new value's colour
+- **the view**: after an expansion the expanded note and the notes it brought
+  are panned into the usable area, zoomed out only as needed and never below
+  `MIN_READABLE_ZOOM` — an operator zoomed out past it is brought back to it,
+  never further in — centred on the expanded note when they cannot fit there,
+  animated unless reduced motion; the pan hint says what is outside. Otherwise the selection is kept clear
+- **marks**: a note whose expansion would add visible notes shows "+N" over
+  it, one that adds only edges between drawn notes "↔"; the key explains both
+- **the pill**: it reads the payload on the page, so it follows each swap;
+  while a request is out any knowledge frame, `lens.refresh` or a reopen after
+  an error shows it, and a swap never hides it
 
 **Knowledge graph canvas** (K2 S4) — an enhancement: the page is complete
 without it. A view that draws any node (not the picker, a refusal, an
@@ -1906,9 +2009,11 @@ draws stays drawn whatever the slider says):
   is outside this view: drag to pan, or zoom out." under the canvas, shown
   while — and only while — part of the graph is outside the view, after
   every pan, zoom or resize
-- **layout** once per load: concentric by hop around the focus, or a
+- **layout** once per load: concentric by hop around the focus (its base
+  notes; expansions are placed after, Knowledge graph expansion canvas), or a
   force-directed `cose` from a circle in scoped mode; nothing re-lays out
-- **controls**, each navigating to the page's own query with one key
+- **controls**, each (but expansion and collapse, which swap in place)
+  navigating to the page's own query with one key
   changed (selection and `pin` kept) so text, payload and canvas re-render
   together: the min-weight slider (0–1 in 0.05 steps, starting at the
   applied threshold even off that grid — when the browser would round the

@@ -8,18 +8,24 @@
   the stylesheet's conventions and the "text first, canvas from the same
   payload" rule, and no code.
 
-  Four rules shape everything below.
+  Five rules shape everything below.
 
   1. THE CANVAS DRAWS EXACTLY THE PAYLOAD. Every node and every edge in it,
      nothing else. The server applied the weight and provenance filters
      before its cap (an edge they hide is counted, not shipped), so the canvas
      cannot lower a threshold on its own — and does not raise one either.
 
-  2. EVERY CONTROL NAVIGATES. The min-weight slider (on `change`, not while
-     dragging), the provenance toggles, the depth and the colour mode each
-     rewrite one key of the page's own query and load it: the server
-     re-renders text, payload and canvas together, so a reload reproduces
-     the view and the text below always agrees with the picture.
+  2. EVERY CONTROL NAVIGATES — EXPANSION SWAPS IN PLACE (D16). The
+     min-weight slider (on `change`, not while dragging), the provenance
+     toggles, the depth and the colour mode each rewrite one key of the
+     page's own query and load it: the server re-renders text, payload and
+     canvas together, so a reload reproduces the view and the text below
+     always agrees with the picture. Show its neighbours, Collapse and
+     remove — and a double click on a note that can expand — fetch the same
+     route for the new address instead, one request at a time, and commit
+     its text, payload, panel and picture as one view before the address is
+     pushed; while that request is out, every graph-changing, panel and
+     full-page action is inert.
 
   3. NO STYLE CLAIM IS DERIVED HERE. Direction, symmetry and resolution are
      the server's: each edge carries its `style` (class tokens, stroke,
@@ -29,10 +35,15 @@
      palette for the node colour mode that shares no colour with it, width
      from weight and size from degree in view.
 
-  4. THE LAYOUT RUNS ONCE. Concentric by hop around the focus, or a
-     force-directed `cose` for a scoped graph — once per page load. A click
-     opens the S5 panel through htmx and lights the selection; it never moves
-     a node.
+  4. SURVIVING NOTES NEVER MOVE. A load lays out its base notes once —
+     concentric by hop around the focus, or a force-directed `cose` for a
+     scoped graph — then places each applied expansion's notes beside the
+     note expanded, in URL order. A swap diffs by persistent note and edge
+     identity: what stays keeps its position (its size follows its degree),
+     what is new is placed by that same rule. A reload reproduces a fresh
+     load, not the live picture: the URL restores exploration, not saved
+     coordinates. A click opens the S5 panel through htmx and lights the
+     selection; it never moves a node.
 
   5. FULL PAGE IS PRESENTATION (D17). `canvas=full` draws the same view: the
      server only marks the page with it, and this file applies it — a class,
@@ -109,6 +120,10 @@
   //: How long a refit or a pan after a toggle or a panel takes, unless the
   //: operator prefers reduced motion.
   const MOTION_MS = 250;
+  //: Cytoscape's double-click window (`multiClickDebounceTime`): two taps
+  //: this close are a `dbltap`. Until it ends a tap's panel moves nothing,
+  //: and does not show over the note tapped.
+  const DOUBLE_TAP_MS = 250;
   // Labels are the canvas's content: the fit that opens it may not shrink
   // them past MIN_RENDERED_FONT pixels. A graph that cannot then fit is
   // opened at that zoom on its focus (or its centre), and the pan hint says
@@ -130,6 +145,25 @@
   const LABEL_CLEARANCE = 6;
   //: The widest a focus graph's rings are stretched to fill a wide canvas.
   const MAX_STRETCH = 2;
+  //: The base layout's spacing between notes: its rings', and the step an
+  //: expansion's notes are placed out from the note expanded at (D16).
+  const NODE_SPACING = 140;
+  //: Rings out from that note — the first at the base layout's ring
+  //: spacing, each next a note's width further — are searched until a place
+  //: is clear. For this many rings a place must also leave its edges'
+  //: labels room; past them, clear of every note and title is enough.
+  const PLACE_RINGS = 12;
+  //: The distance along a ring between the places tried.
+  const PLACE_STEP = SIZE_MAX / 2;
+  //: A title's widest (`text-max-width`) and its gap under the note.
+  const TITLE_MAX_WIDTH = 140;
+  const TITLE_MARGIN = 4;
+  //: Kept clear around each placed note, beyond its title's clearance: an
+  //: edge label's height (on its ground), so a label on the edge between
+  //: two notes has somewhere to go between them.
+  const LABEL_ROOM = EDGE_FONT + 8;
+  //: The badge's height: "+N" or the edge-only mark, over the note (D16).
+  const BADGE_HEIGHT = 16;
 
   // A plain `{}` inherits `__proto__` and friends, and a note id is any
   // string; every id-keyed map here is prototype-free.
@@ -161,22 +195,169 @@
     return typeof value === "string" && value !== "" ? value : null;
   }
 
-  // The values present take slots by node count, most first, ties by name
-  // (S4 D7): the same graph colours the same way on every load.
-  function colourSlots(nodes, mode) {
+  function byName(a, b) {
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+
+  // The values present, most nodes first, ties by name, with their counts.
+  function rankedValues(nodes, mode) {
     const counts = dict();
     nodes.forEach(function (node) {
       const value = colourValue(node, mode);
       if (value !== null) counts[value] = (counts[value] || 0) + 1;
     });
     const values = Object.keys(counts).sort(function (a, b) {
-      return counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0);
+      return counts[b] - counts[a] || byName(a, b);
     });
-    const slots = dict();
-    values.slice(0, NODE_PALETTE.length).forEach(function (value, index) {
-      slots[value] = NODE_PALETTE[index];
+    return { values: values, counts: counts };
+  }
+
+  // The applied expansions' ids, in URL order (D16).
+  function appliedSteps(view) {
+    return (view.expansions || [])
+      .filter(function (step) { return step.state === "applied"; })
+      .map(function (step) { return step.id; });
+  }
+
+  // Whether a fetched view is whole enough to commit (D16): every field the
+  // canvas, key and toolbar read present, of the kind and in the range the
+  // server writes it (`graph_payload`) — counts whole and never negative,
+  // states one of their names — its notes and edges each with an id of its
+  // own, and every edge's ends among its notes (the server draws a note for
+  // every end, ghosts included). Checked before anything on the page changes.
+  const NOTE_STATES = ["available", "focus", "expanded", "complete", "over_cap"];
+  const STEP_STATES = ["applied", "unreached", "refused"];
+  const FACTS_STATES = ["ok", "pending", "unread", "missing"];
+  const EDGE_KINDS = ["typed", "wiki_link", "provenance"];
+  const STROKES = ["solid", "dotted", "dashed"];
+  //: The depths a focus view is drawn at (`MAX_DEPTH`): its own, and each
+  //: one's would-be count, which the server writes for every depth.
+  const DEPTHS = [1, 2];
+
+  function wholeView(view) {
+    const record = function (item) {
+      return item !== null && typeof item === "object" && !Array.isArray(item);
+    };
+    const text = function (value) { return typeof value === "string"; };
+    const name = function (value) { return text(value) && value !== ""; };
+    const flag = function (value) { return typeof value === "boolean"; };
+    const count = function (value) { return Number.isInteger(value) && value >= 0; };
+    const one = function (names) { return function (value) { return names.indexOf(value) !== -1; }; };
+    const nullOr = function (test) { return function (value) { return value === null || test(value); }; };
+    // `item` a record whose every named field passes its test.
+    const shaped = function (item, fields) {
+      return record(item) && Object.keys(fields).every(function (key) {
+        return Object.prototype.hasOwnProperty.call(item, key) && fields[key](item[key]);
+      });
+    };
+    const weight = function (value) { return typeof value === "number" && isFinite(value); };
+    const expansion = function (value) {
+      return shaped(value, { state: one(NOTE_STATES), would_count: count, cap: count });
+    };
+    const style = function (value) {
+      return shaped(value, { "class": name, stroke: one(STROKES), arrowhead: flag, label: text });
+    };
+    const step = function (value) {
+      return shaped(value, { id: name, state: one(STEP_STATES), added_nodes: count, added_edges: count }) &&
+        (value.would_count === undefined || count(value.would_count));
+    };
+    // The route's own ranges: a threshold clamped to [0, 1], known groups
+    // only, each once, and an empty list read as all of them.
+    const groups = function (value) {
+      return Array.isArray(value) && value.length > 0 && value.every(function (group, index) {
+        return PROVENANCE_GROUPS.indexOf(group) !== -1 && value.indexOf(group) === index;
+      });
+    };
+    const shown = shaped(view, {
+      mode: one(["focus"]),
+      focus: name,
+      depth: one(DEPTHS),
+      nodes: function (v) { return Array.isArray(v) && v.length > 0; },
+      edges: Array.isArray,
+      expansions: Array.isArray,
+      legend: Array.isArray,
+      hidden: function (v) { return shaped(v, { by_weight: count, by_provenance: count, total: count }); },
+      would_be_nodes: function (v) {
+        return record(v) && Object.keys(v).length === DEPTHS.length &&
+          DEPTHS.every(function (level) { return count(v[String(level)]); });
+      },
+      filters: function (v) {
+        return shaped(v, {
+          min_weight: function (w) { return weight(w) && w >= 0 && w <= 1; },
+          provenance: groups
+        });
+      }
     });
-    return { slots: slots, values: values, counts: counts };
+    if (!shown) return false;
+    const notes = dict();
+    const nodesWhole = view.nodes.every(function (node) {
+      if (!record(node) || !name(node.id) || node.id in notes) return false;
+      notes[node.id] = true;
+      return shaped(node, {
+        label: text, facts_state: one(FACTS_STATES), ghost: flag, focus: flag, layer_only: flag,
+        hop: count, degree: count, note_type: text, status: text, namespace: text,
+        expanded: flag, via: nullOr(name), undrawn_nodes: count, undrawn_edges: count,
+        expansion: nullOr(expansion)
+      });
+    });
+    if (!nodesWhole) return false;
+    const edges = dict();
+    const edgesWhole = view.edges.every(function (edge) {
+      if (!record(edge) || !name(edge.id) || edge.id in edges) return false;
+      edges[edge.id] = true;
+      return shaped(edge, {
+        from: name, to: name, kind: one(EDGE_KINDS), weight: nullOr(weight), partial: flag, style: style
+      }) && edge.from in notes && edge.to in notes;
+    });
+    return edgesWhole && view.expansions.every(step) &&
+      view.legend.every(function (line) { return shaped(line, { type: text, "class": name }); });
+  }
+
+  // The values `slotOf` has not seen, in the order they take slots (D16):
+  // the base notes' (`via` none) by node count, ties by name (S4 D7); then
+  // each applied expansion's, in URL order, ties by name; then any other's.
+  // So the same graph colours the same way on every load.
+  function unslottedValues(view, mode, slotOf) {
+    const steps = appliedSteps(view);
+    const groupOf = dict();
+    const base = [];
+    view.nodes.forEach(function (node) {
+      const value = colourValue(node, mode);
+      if (value === null || value in slotOf) return;
+      const step = node.via ? steps.indexOf(node.via) : -1;
+      const group = node.via ? (step === -1 ? steps.length + 1 : step + 1) : 0;
+      if (group === 0) base.push(node);
+      if (!(value in groupOf) || group < groupOf[value]) groupOf[value] = group;
+    });
+    const counts = rankedValues(base, mode).counts;
+    return Object.keys(groupOf).sort(function (a, b) {
+      return groupOf[a] - groupOf[b] ||
+        (groupOf[a] === 0 ? (counts[b] || 0) - (counts[a] || 0) : 0) ||
+        byName(a, b);
+    });
+  }
+
+  // A badge on a note (D16): dark text on a light halo, as an image, so
+  // the note's own colour shows around it.
+  function badgeImage(text) {
+    const width = 8 + 8 * text.length;
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width +
+      '" height="' + BADGE_HEIGHT + '" viewBox="0 0 ' + width + " " + BADGE_HEIGHT + '">' +
+      '<text x="' + width / 2 + '" y="12" text-anchor="middle" font-family="sans-serif" ' +
+      'font-size="12" font-weight="700" fill="' + INK + '" stroke="' + PANEL + '" ' +
+      'stroke-width="3" paint-order="stroke">' + text + "</text></svg>";
+    return { image: "data:image/svg+xml;utf8," + encodeURIComponent(svg), width: width };
+  }
+
+  // What showing a note's neighbours would add, on the note (D16): "+N" for
+  // N new visible notes, "↔" when it adds only edges between notes drawn.
+  function addsOf(node) {
+    if (!node.expansion) return null;
+    if (node.undrawn_nodes > 0) {
+      return Object.assign({ kind: "adds-notes" }, badgeImage("+" + node.undrawn_nodes));
+    }
+    if (node.undrawn_edges > 0) return Object.assign({ kind: "adds-edges" }, badgeImage("↔"));
+    return null;
   }
 
   function strokeOfClass(cssClass) {
@@ -223,6 +404,91 @@
     const values = params.getAll(key);
     const value = values.length ? values[values.length - 1] : "";
     return blank(value) ? "" : value;
+  }
+
+  //: The keys in the order the server's URL builder writes them
+  //: (`_URL_KEYS`); `canvas`, last, is `queryWith`'s.
+  const URL_KEYS = [
+    "focus", "depth", "expand", "type", "namespace", "min_weight",
+    "provenance", "colour", "selected", "edge", "pin"
+  ];
+
+  // A value as the server's URL builder writes it — Python's `urlencode`,
+  // that is `quote_plus` with nothing kept safe: letters, digits and `_.-~`
+  // as they are, a space as `+`, anything else `%XX` of its UTF-8 (so `*`
+  // is `%2A`, where `URLSearchParams` would keep it and write `~` `%7E`).
+  function quotePlus(value) {
+    return encodeURIComponent(value)
+      .replace(/[!'()*]/g, function (c) { return "%" + c.charCodeAt(0).toString(16).toUpperCase(); })
+      .replace(/%20/g, "+");
+  }
+
+  // One pair's value as the parser reads it: `+` a space, percent-decoded.
+  function pairValue(pair) {
+    const at = pair.indexOf("=");
+    const raw = (at === -1 ? "" : pair.slice(at + 1)).replace(/\+/g, " ");
+    try {
+      return decodeURIComponent(raw);
+    } catch (error) {
+      return raw;
+    }
+  }
+
+  // Show its neighbours for `pid` (D16), as `knowledge_graph_expand_url`
+  // writes it for the view on screen: every earlier request for the note
+  // dropped and the note appended last, the note selected, `edge` cleared
+  // and the edge it was drawn for kept as `pin`; every other pair exactly
+  // as the server wrote it, in its key order (`expand` in request order),
+  // the pairs added encoded as it encodes them, and `canvas` last as
+  // `queryWith` spells it — one address, one spelling. The view's pairs are
+  // the server's own (`data-kgraph-address`, the address it rendered, each
+  // swap's), not the address bar's, which may spell the same view otherwise
+  // (`min_weight=.70`, `colour=namespace`); the selection is the address
+  // bar's, which panel clicks move.
+  function expandQuery(pid, drawnEdge) {
+    const now = new URLSearchParams(window.location.search);
+    const page = document.querySelector("[data-knowledge-graph]");
+    const address = page && typeof page.getAttribute === "function"
+      ? page.getAttribute("data-kgraph-address")
+      : null;
+    const search = address
+      ? (withoutFragment(address).split("?")[1] || "")
+      : window.location.search.replace(/^\?/, "");
+    const raw = search.split("&").filter(Boolean);
+    const focus = raw.filter(function (pair) { return pairKey(pair) === "focus"; })
+      .map(pairValue).pop() || "";
+    // The edge the view was drawn for — an `edge=` is its own pin — kept
+    // only when the view draws it, as the panel route's `drawn_selection`
+    // keeps it: a shared address naming an edge since gone pins nothing,
+    // whether or not the first tap's panel has landed yet.
+    const chosen = queryValue(now, "edge") || queryValue(now, "pin");
+    const pin = chosen && drawnEdge(chosen) ? chosen : "";
+    const requested = dict();
+    const pairs = [];
+    raw.forEach(function (pair) {
+      const key = pairKey(pair);
+      if (key === CANVAS_KEY || key === "selected" || key === "edge" || key === "pin") return;
+      if (key === "expand") {
+        // As the parser reads them: first occurrences, blanks and the focus
+        // dropped.
+        const value = pairValue(pair);
+        if (blank(value) || value === focus || value === pid || requested[value]) return;
+        requested[value] = true;
+      }
+      pairs.push([key, pair]);
+    });
+    pairs.push(["expand", "expand=" + quotePlus(pid)], ["selected", "selected=" + quotePlus(pid)]);
+    if (pin) pairs.push(["pin", "pin=" + quotePlus(pin)]);
+    const rank = function (pair) {
+      const at = URL_KEYS.indexOf(pair[0]);
+      return at === -1 ? URL_KEYS.length : at;
+    };
+    // A stable sort: repeated keys keep their order.
+    const ordered = pairs.map(function (pair, index) { return [pair, index]; })
+      .sort(function (a, b) { return rank(a[0]) - rank(b[0]) || a[1] - b[1]; })
+      .map(function (entry) { return entry[0][1]; });
+    if (fullPage) ordered.push(CANVAS_KEY + "=full");
+    return ordered.join("&");
   }
 
   //: Python's whitespace (`str.isspace`, what the parser's `.strip()`
@@ -337,6 +603,18 @@
   //: The control that opened the panel on screen: where Esc or Close
   //: returns the focus. None for a canvas click or a panel the page loaded.
   let panelInvoker = null;
+  //: The expansion or collapse in flight (D16) — `{ href, controller }` —
+  //: one at a time; none once it commits, fails or is retired.
+  let graphRequest = null;
+  //: The address a `#` link followed while that request is out — Text
+  //: view — is about to announce with a `popstate`: a jump within the page,
+  //: not a Back or Forward, so it does not retire the request.
+  let jumpingTo = null;
+  //: Starts one (set by `draw`): `href` a page address, `anchor` the note
+  //: an expansion expands. Answers whether it took the click.
+  let changeGraph = function () { return false; };
+  //: The controls follow the request's start and end (set by `draw`).
+  let busyChanged = function () {};
 
   function withoutFragment(href) {
     const hash = href.indexOf("#");
@@ -356,7 +634,15 @@
 
   function trackPanel(event) {
     const detail = event.detail || {};
-    if (retired || !panelHost || detail.target !== panelHost) return;
+    if (!panelHost || detail.target !== panelHost) return;
+    // While an expansion or collapse is out no panel request leaves: it
+    // would answer from the view being replaced (D16). Cancelled, it is
+    // not one whose swap pushes.
+    if (graphRequest) {
+      event.preventDefault();
+      return;
+    }
+    if (retired) return;
     const page = pushUrlOf(detail.elt);
     // What opened it, for the focus to return to on close: a text or panel
     // link; none for a canvas click.
@@ -399,9 +685,24 @@
     pendingPush = null;
   }
 
+  // The expansion or collapse in flight, retired (D16): by a Back or
+  // Forward or a toggle. Its fetch is aborted, and should its answer come
+  // anyway it is no longer `graphRequest`: it neither commits, pushes nor
+  // touches the controls, which are given back now.
+  function retireGraphRequest() {
+    const request = graphRequest;
+    if (!request) return;
+    graphRequest = null;
+    if (request.controller) request.controller.abort();
+    busyChanged();
+  }
+
   function onTravel() {
+    const jumped = jumpingTo !== null && window.location.href === jumpingTo;
+    jumpingTo = null;
     syncRefresh();
-    if (!panelHost) return;
+    if (!panelHost || jumped) return;
+    retireGraphRequest();
     abandonPending();
     if (withoutFragment(window.location.href) === withoutFragment(shownHref)) {
       // The entry's panel is the one on screen; the canvas lights it again.
@@ -472,6 +773,8 @@
 
   function onKeydown(event) {
     if (event.key !== "Escape" || event.defaultPrevented) return;
+    // A panel action: inert while an expansion or collapse is out (D16).
+    if (graphRequest) return;
     const target = event.target || {};
     if (target.tagName === "SELECT") return;
     if (target.tagName === "INPUT" && target.type === "search" && target.value) return;
@@ -486,8 +789,70 @@
     if (!link || !panelHost || typeof panelHost.contains !== "function" ||
         !panelHost.contains(link)) return;
     // A middle, modified or context click opens the link as a link.
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (modified(event)) return;
+    if (graphRequest) {
+      // Inert while an expansion or collapse is out (D16).
+      event.preventDefault();
+      return;
+    }
     if (closePanel()) event.preventDefault();
+  }
+
+  function modified(event) {
+    return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+  }
+
+  // ── Show its neighbours, Collapse and remove: in place (D16) ─────────
+  //
+  // The panel's two links and the scope line's and "Not shown"'s remove
+  // links are plain links the server wrote; on a drawn page a plain click
+  // on one fetches its address and swaps the view in (`changeGraph`), and
+  // while a request is out it does nothing at all. A middle, modified or
+  // context click opens the link as a link.
+
+  const GRAPH_LINKS = "a[data-kgraph-expand], a[data-kgraph-collapse], a[data-kgraph-expansion-remove]";
+
+  // Any other link to this page's graph — Centre on this, a remedy or depth
+  // link, the pill, a reload — loads a view built from the one being
+  // replaced: inert too while a request is out. Links to note pages, and
+  // a `#` jump such as Text view, stay live.
+  function graphAddress(link) {
+    const href = link.getAttribute("href") || "";
+    // A `#` jump stays on this page; anything else is resolved as the
+    // browser would follow it — the pill's href is the full address.
+    if (href === "" || href.charAt(0) === "#") return false;
+    let target = null;
+    try {
+      target = new URL(href, window.location.href);
+    } catch (error) {
+      return false;
+    }
+    return target.origin === new URL(window.location.href).origin && target.pathname === GRAPH_PATH;
+  }
+
+  // The address a `#` link leads to, on this page; none for any other link.
+  function fragmentJump(link) {
+    const href = link.getAttribute("href") || "";
+    if (href.charAt(0) !== "#") return null;
+    try {
+      return new URL(href, window.location.href).href;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function onGraphLinkClick(event) {
+    const target = event.target;
+    if (!target || typeof target.closest !== "function" || modified(event)) return;
+    const link = target.closest(GRAPH_LINKS);
+    if (graphRequest) {
+      const any = link || target.closest("a[href]");
+      if (any && graphAddress(any)) event.preventDefault();
+      else if (any && !event.defaultPrevented) jumpingTo = fragmentJump(any);
+      return;
+    }
+    if (!link || event.defaultPrevented) return;
+    if (changeGraph(link.getAttribute("href"), link, null)) event.preventDefault();
   }
 
   // ── Full page (D17): presentation, carried by every graph link ──────
@@ -536,6 +901,17 @@
     }
     return path + (kept.length ? "?" + kept.join("&") : "") + fragment;
   }
+
+  //: The text a drawn view renders between the stage and its payload, in
+  //: order, each there or not as the view has it: what a swap replaces.
+  const TEXT_SECTIONS = [
+    "[data-kgraph-legend]",
+    "[data-kgraph-focus]",
+    "[data-kgraph-edges]",
+    "[data-kgraph-layers]",
+    "[data-kgraph-missing]",
+    "[data-kgraph-hidden]"
+  ];
 
   //: The attributes a graph link keeps its addresses in, and the path each
   //: names: the page, or its panel fragment.
@@ -618,7 +994,11 @@
   // node or edge this page drew — any frame, in a scoped-global view, where
   // a new edge can bring in a note the page never drew — reveals the pill,
   // and so do a `lens.refresh` and a stream that reopens after an error:
-  // either way frames may have been missed. The pill is an ordinary link to
+  // either way frames may have been missed. "Drawn" is the payload on the
+  // page, so it follows each swap (D16); while an expansion or collapse is
+  // out, ANY knowledge frame reveals it, since the view coming back may
+  // draw what it names, and the answer may predate it. Once shown the pill
+  // stays until the page is reloaded: a swap never hides it. The pill is an ordinary link to
   // the page's current address (`syncRefresh`, below); the server
   // re-renders from facts the event marked stale, so nothing is redrawn
   // here.
@@ -671,10 +1051,12 @@
     try {
       message = JSON.parse(event.data);
     } catch (error) {
+      if (graphRequest) showRefresh();
       return;
     }
     const data = message && message.payload;
-    if (data && typeof data === "object" && namesDrawn(event.type, data)) showRefresh();
+    if (graphRequest) showRefresh();
+    else if (data && typeof data === "object" && namesDrawn(event.type, data)) showRefresh();
   }
 
   function listen() {
@@ -816,44 +1198,71 @@
     if (previous && previous.cy) previous.cy.destroy();
 
     const mode = payload.colour === "type" ? "type" : "namespace";
-    const sizes = nodeSizes(payload.nodes);
-    const colours = colourSlots(payload.nodes, mode);
+    //: The view on screen: this load's payload, then each swap's (D16).
+    let current = payload;
+
+    // ── Elements, by persistent identity (D16) ──────────────────────────
     // Cytoscape's own element ids are opaque: a note id is any string, and
     // the bundle misbehaves on ids such as `__proto__`. The payload's id
-    // travels as `pid`.
-    const elementOf = dict();
-    const nodeById = dict();
-    const elements = [];
-    payload.nodes.forEach(function (node, index) {
-      const id = "n" + index;
-      elementOf[node.id] = id;
-      nodeById[node.id] = node;
-      const value = colourValue(node, mode);
+    // travels as `pid`; each note's and edge's element id is minted once
+    // and kept for the page's lifetime, so a swap diffs one payload against
+    // the next by identity, never by array position.
+    const nodeIds = dict();
+    const edgeIds = dict();
+    let minted = 0;
+    function elementId(ids, prefix, pid) {
+      if (!ids[pid]) {
+        minted += 1;
+        ids[pid] = prefix + minted;
+      }
+      return ids[pid];
+    }
+
+    // ── Colour slots, kept for the page's lifetime (D16) ────────────────
+    // The values present take slots in `unslottedValues`' order; a value
+    // keeps its slot through a collapse and every later swap, and a value
+    // that came once the slots were all taken keeps the neutral. A note
+    // whose refreshed value changed takes its new value's colour.
+    const slotOf = dict();
+    let slotsTaken = 0;
+    function takeSlots(view) {
+      unslottedValues(view, mode, slotOf).forEach(function (value) {
+        slotOf[value] = slotsTaken < NODE_PALETTE.length ? NODE_PALETTE[slotsTaken] : null;
+        slotsTaken += 1;
+      });
+    }
+    function colourOf(value) {
+      return (value !== null && slotOf[value]) || NODE_NEUTRAL;
+    }
+
+    function nodeDefinition(node, sizes) {
       const classes = [];
       if (node.focus) classes.push("focus");
       if (node.ghost) classes.push("ghost");
       if (node.facts_state === "pending") classes.push("pending");
       if (node.status === "archived") classes.push("archived");
       if (node.status === "quarantined") classes.push("quarantined");
-      elements.push({
+      const adds = addsOf(node);
+      if (adds) classes.push(adds.kind);
+      return {
         group: "nodes",
         data: {
-          id: id,
+          id: elementId(nodeIds, "n", node.id),
           pid: node.id,
           label: node.label,
           size: sizes[node.id],
-          colour: (value !== null && colours.slots[value]) || NODE_NEUTRAL,
-          hop: node.hop || 0
+          colour: colourOf(colourValue(node, mode)),
+          hop: node.hop || 0,
+          via: node.via || "",
+          badge: adds ? adds.image : "",
+          badgeWidth: adds ? adds.width : 0
         },
         classes: classes.join(" ")
-      });
-    });
-    const edgeById = dict();
-    (payload.edges || []).forEach(function (edge, index) {
-      const source = elementOf[edge.from];
-      const target = elementOf[edge.to];
-      if (!source || !target) return;
-      edgeById[edge.id] = edge;
+      };
+    }
+
+    function edgeDefinition(edge, view, drawn) {
+      if (!drawn[edge.from] || !drawn[edge.to]) return null;
       const style = edge.style || {};
       const classes = String(style["class"] || "kedge-unknown").split(/\s+/).filter(Boolean);
       classes.push("stroke-" + (style.stroke || "solid"));
@@ -867,24 +1276,99 @@
       // Anywhere else a label prefers the middle, moved along its edge only
       // when the middle is not clear.
       let labelEnd = style.label ? "middle" : "";
-      if (style.label && payload.focus && edge.from === payload.focus) labelEnd = "target";
-      else if (style.label && payload.focus && edge.to === payload.focus) labelEnd = "source";
+      if (style.label && view.focus && edge.from === view.focus) labelEnd = "target";
+      else if (style.label && view.focus && edge.to === view.focus) labelEnd = "source";
       const unresolved = classes.indexOf("kedge-unresolved") !== -1;
-      elements.push({
+      return {
         group: "edges",
         data: {
-          id: "e" + index,
+          id: elementId(edgeIds, "e", edge.id),
           pid: edge.id,
-          source: source,
-          target: target,
+          source: nodeIds[edge.from],
+          target: nodeIds[edge.to],
           width: edgeWidth(edge.weight) + (unresolved ? EMPHASIS : 0),
           label: style.label || "",
           labelEnd: labelEnd,
           labelOffset: END_LABEL_MIN
         },
         classes: classes.join(" ")
+      };
+    }
+
+    // The data a drawn element may take from a later payload: never its
+    // identity or its ends.
+    function changeable(data) {
+      const kept = Object.assign({}, data);
+      delete kept.id;
+      delete kept.source;
+      delete kept.target;
+      return kept;
+    }
+
+    // `view`'s elements onto the canvas: what it no longer draws removed;
+    // what it still draws updated where it stands (its size from its new
+    // degree, its colour from its value); what is new added, unplaced.
+    // Answers the nodes added.
+    // `view`'s element definitions, built before anything is drawn from
+    // them: a swap that cannot build them changes nothing on the page —
+    // the colour slots its values took given back too, so a later view's
+    // values take them as if it had never come.
+    function elementsOf(view) {
+      const slotted = Object.keys(slotOf);
+      const taken = slotsTaken;
+      try {
+        takeSlots(view);
+        const sizes = nodeSizes(view.nodes);
+        const drawn = dict();
+        view.nodes.forEach(function (node) { drawn[node.id] = true; });
+        const nodes = view.nodes.map(function (node) { return nodeDefinition(node, sizes); });
+        const edges = (view.edges || []).map(function (edge) {
+          return edgeDefinition(edge, view, drawn);
+        }).filter(Boolean);
+        return { nodes: nodes, edges: edges };
+      } catch (error) {
+        Object.keys(slotOf).forEach(function (value) {
+          if (slotted.indexOf(value) === -1) delete slotOf[value];
+        });
+        slotsTaken = taken;
+        throw error;
+      }
+    }
+
+    function applyElements(view, built) {
+      const definitions = built || elementsOf(view);
+      const nodes = definitions.nodes;
+      const edges = definitions.edges;
+      const keep = dict();
+      nodes.concat(edges).forEach(function (definition) { keep[definition.data.id] = true; });
+      cy.remove(cy.elements().filter(function (element) { return !keep[element.id()]; }));
+      const added = [];
+      nodes.forEach(function (definition) {
+        const existing = cy.getElementById(definition.data.id);
+        if (!existing.length) {
+          added.push(definition);
+          return;
+        }
+        existing.data(changeable(definition.data));
+        existing.classes(definition.classes);
       });
-    });
+      const addedNodes = added.length ? cy.add(added) : cy.collection();
+      const addedEdges = [];
+      edges.forEach(function (definition) {
+        const existing = cy.getElementById(definition.data.id);
+        if (existing.length && (existing.data("source") !== definition.data.source ||
+            existing.data("target") !== definition.data.target)) {
+          cy.remove(existing);
+        } else if (existing.length) {
+          existing.data(changeable(definition.data));
+          existing.classes(definition.classes);
+          return;
+        }
+        addedEdges.push(definition);
+      });
+      if (addedEdges.length) cy.add(addedEdges);
+      return addedNodes;
+    }
 
     const style = [
       {
@@ -935,6 +1419,17 @@
       {
         selector: "node.pending.quarantined",
         style: { "border-style": "double", "border-width": 5, "border-color": ACCENT }
+      },
+      // What showing its neighbours would add (D16): a badge on the note,
+      // at its own size whatever the note's, never under its title.
+      {
+        selector: "node.adds-notes, node.adds-edges",
+        style: {
+          "background-image": "data(badge)",
+          "background-fit": "none",
+          "background-clip": "none",
+          "background-image-containment": "over"
+        }
       },
       {
         selector: "edge",
@@ -1022,7 +1517,7 @@
     if (container.replaceChildren) container.replaceChildren();
     const cy = window.cytoscape({
       container: container,
-      elements: elements,
+      elements: [],
       style: style,
       // A drag pans; nothing moves once placed, and taps do not "select" in
       // Cytoscape's sense — the selection is the URL's.
@@ -1030,25 +1525,214 @@
       autounselectify: true,
       boxSelectionEnabled: false,
       minZoom: 0.2,
-      maxZoom: 3
+      maxZoom: 3,
+      multiClickDebounceTime: DOUBLE_TAP_MS
     });
 
-    // ── Layout: once ────────────────────────────────────────────────────
+    // ── Placement beside the note expanded (D16) ────────────────────────
+    // New notes go around the note they came from, on the side facing away
+    // from the drawn graph's centre: ring by ring at the base layout's
+    // spacing, each at the first place clear of every note placed so far —
+    // each reserved at the largest size a note can grow to, under its title
+    // as measured at its widest — in id order, so the same graph on the
+    // same canvas places the same way. Nothing already placed moves.
+
+    // A title's box: measured where there is a renderer, else estimated
+    // from its length (the headless harness has no text metrics).
+    function titleSize(node) {
+      if (!cy.headless()) {
+        const box = node.boundingBox({
+          includeNodes: false,
+          includeEdges: false,
+          includeLabels: true,
+          includeOverlays: false
+        });
+        if (Number.isFinite(box.w) && Number.isFinite(box.h) && box.w > 0) {
+          return { w: box.w, h: box.h };
+        }
+      }
+      const length = String(node.data("label") || "").length * NODE_FONT * 0.6;
+      const lines = Math.max(1, Math.ceil(length / TITLE_MAX_WIDTH));
+      return { w: Math.min(length, TITLE_MAX_WIDTH) + 4, h: lines * NODE_FONT * 1.3 + 4 };
+    }
+
+    // An edge label's box, measured where there is a renderer.
+    function edgeLabelSize(edge) {
+      if (!cy.headless()) {
+        const box = labelBox(edge);
+        if (Number.isFinite(box.w) && Number.isFinite(box.h) && box.w > 0) {
+          return { w: box.w, h: box.h };
+        }
+      }
+      const length = String(edge.data("label") || "").length * EDGE_FONT * 0.6;
+      return { w: length + 4, h: EDGE_FONT * 1.3 + 4 };
+    }
+
+    // The room a note at `at` takes: its body at the largest size, its
+    // title under it, and `margin` around both.
+    function reserve(title, at, margin) {
+      const half = Math.max(SIZE_MAX, title.w) / 2 + margin;
+      return {
+        x1: at.x - half,
+        x2: at.x + half,
+        y1: at.y - SIZE_MAX / 2 - margin,
+        y2: at.y + SIZE_MAX / 2 + TITLE_MARGIN + title.h + margin
+      };
+    }
+
+    function around(point, size) {
+      return {
+        x1: point.x - size.w / 2 - LABEL_CLEARANCE,
+        x2: point.x + size.w / 2 + LABEL_CLEARANCE,
+        y1: point.y - size.h / 2 - LABEL_CLEARANCE,
+        y2: point.y + size.h / 2 + LABEL_CLEARANCE
+      };
+    }
+
+    // A place is clear when the note's room meets no other note's, and the
+    // middle of each labelled edge to a note already placed has room for
+    // its label clear of every note and title — the new one's included.
+    const ALONG = [0.5, 0.4, 0.6, 0.3, 0.7];
+
+    function placeBeside(anchor, nodes, placed) {
+      const ROOM = LABEL_CLEARANCE + LABEL_ROOM / 2;
+      const where = dict();
+      const rooms = [];
+      const bodies = [];
+      placed.forEach(function (node) {
+        const title = titleSize(node);
+        where[node.id()] = true;
+        rooms.push(reserve(title, node.position(), ROOM));
+        bodies.push(reserve(title, node.position(), LABEL_CLEARANCE));
+      });
+      const at = anchor.position();
+      let centre = at;
+      if (placed.length) {
+        const xs = placed.map(function (node) { return node.position().x; });
+        const ys = placed.map(function (node) { return node.position().y; });
+        centre = {
+          x: (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2,
+          y: (Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2
+        };
+      }
+      // Only the side facing away: within a quarter turn either way of the
+      // line out from the centre through the anchor. An anchor at the
+      // centre has no such side, and any direction is away.
+      const centred = Math.hypot(at.x - centre.x, at.y - centre.y) < 1;
+      const away = centred ? 0 : Math.atan2(at.y - centre.y, at.x - centre.x);
+      const sweep = centred ? Math.PI : Math.PI / 2;
+      let firstRing = 1;
+      nodes.sort(function (a, b) { return byName(a.data("pid"), b.data("pid")); })
+        .forEach(function (node) {
+          const title = titleSize(node);
+          const links = node.connectedEdges(".labelled").map(function (edge) {
+            const other = edge.source().same(node) ? edge.target() : edge.source();
+            return where[other.id()] ? { other: other.position(), size: edgeLabelSize(edge) } : null;
+          }).filter(Boolean);
+          const clear = function (point, labelled) {
+            const room = reserve(title, point, ROOM);
+            if (!rooms.every(function (other) { return apart(room, other); })) return false;
+            if (!labelled) return true;
+            const body = reserve(title, point, LABEL_CLEARANCE);
+            // Somewhere along the edge's middle half, as `placeEndLabels`
+            // slides a label along its edge.
+            return links.every(function (link) {
+              return ALONG.some(function (t) {
+                const label = around({
+                  x: link.other.x + (point.x - link.other.x) * t,
+                  y: link.other.y + (point.y - link.other.y) * t
+                }, link.size);
+                return apart(label, body) && bodies.every(function (other) { return apart(label, other); });
+              });
+            });
+          };
+          // Outward until a place is clear: every room placed is bounded,
+          // so a ring far enough out always has one. Each note of a group
+          // starts on the ring the one before it took — the rings inside it
+          // had no room for that one.
+          let spot = null;
+          for (let ring = firstRing; !spot; ring += 1) {
+            const labelled = ring - firstRing < PLACE_RINGS;
+            // First as far out as the base layout's rings are apart (its
+            // spacing and a note at its largest), then a note's width more.
+            const radius = NODE_SPACING + SIZE_MAX * ring;
+            const steps = Math.max(8, Math.ceil((2 * Math.PI * radius) / PLACE_STEP));
+            // A side with no clear place on this ring: the next ring out.
+            for (let turn = 0; !spot; turn += 1) {
+              const offset = (turn * 2 * Math.PI) / steps;
+              if (centred ? offset > sweep : offset >= sweep) break;
+              [1, -1].forEach(function (side) {
+                if (spot || (turn === 0 && side === -1)) return;
+                const angle = away + side * offset;
+                const point = { x: at.x + radius * Math.cos(angle), y: at.y + radius * Math.sin(angle) };
+                if (clear(point, labelled)) spot = point;
+              });
+            }
+            if (spot) firstRing = ring;
+          }
+          node.position(spot);
+          where[node.id()] = true;
+          rooms.push(reserve(title, node.position(), ROOM));
+          bodies.push(reserve(title, node.position(), LABEL_CLEARANCE));
+        });
+    }
+
+    // Each group of new notes beside its anchor, in order: the base notes'
+    // (`via` none, and any whose `via` is not drawn) beside the focus, then
+    // each applied expansion's, in URL order, so an anchor is placed before
+    // the notes it brought.
+    function placeNew(view, added, placed) {
+      const steps = appliedSteps(view);
+      const groups = dict();
+      added.forEach(function (node) {
+        const via = node.data("via");
+        const anchored = via && byPid(cy.nodes(), via).length ? via : "";
+        (groups[anchored] = groups[anchored] || []).push(node);
+      });
+      const order = Object.keys(groups).sort(function (a, b) {
+        const at = function (id) { return id === "" ? -1 : steps.indexOf(id) === -1 ? steps.length : steps.indexOf(id); };
+        return at(a) - at(b) || byName(a, b);
+      });
+      const focus = cy.nodes(".focus");
+      let done = placed;
+      order.forEach(function (via) {
+        const anchor = via ? byPid(cy.nodes(), via) : focus;
+        const group = cy.collection(groups[via]);
+        if (anchor.length) placeBeside(anchor[0], groups[via], done);
+        done = done.union(group);
+      });
+    }
+
+    // The edge labels placed again around the notes as they now stand:
+    // nothing moves but labels.
+    function relabel() {
+      cy.edges().removeClass("label-at-source label-at-target");
+      cy.edges().forEach(function (edge) { edge.data("labelOffset", END_LABEL_MIN); });
+      placeEndLabels(cy);
+    }
+
+    // ── A fresh load's layout (D16) ─────────────────────────────────────
     // Laid out and labelled with every title at its widest — bold, as a lit
     // or matched title is drawn — so lighting a selection or a search never
-    // grows a title onto a label placed beside it.
+    // grows a title onto a label placed beside it. The base notes (`via`
+    // none) are laid out as S4's were; then each applied expansion's notes
+    // are placed, in URL order, by the rule a live expansion uses. The same
+    // graph, address, faces and canvas size lay out the same way.
+    applyElements(current);
     cy.nodes().addClass("widest");
-    if (payload.mode === "focus") {
-      const maxHop = payload.nodes.reduce(function (high, node) {
-        return Math.max(high, node.hop || 0);
+    if (current.mode === "focus") {
+      const base = cy.nodes().filter(function (node) { return !node.data("via"); });
+      const maxHop = base.reduce(function (high, node) {
+        return Math.max(high, node.data("hop") || 0);
       }, 0);
       cy.layout({
         name: "concentric",
+        eles: base,
         concentric: function (element) { return maxHop + 1 - element.data("hop"); },
         levelWidth: function () { return 1; },
         // Room between rings for the titles under each ring's notes.
         avoidOverlap: true,
-        minNodeSpacing: 140,
+        minNodeSpacing: NODE_SPACING,
         padding: FIT_PADDING,
         animate: false
       }).run();
@@ -1061,11 +1745,12 @@
         ? cy.nodes(".focus").position()
         : { x: 0, y: 0 };
       if (stretch > 1) {
-        cy.nodes().positions(function (node) {
+        base.positions(function (node) {
           const at = node.position();
           return { x: centre.x + (at.x - centre.x) * stretch, y: at.y };
         });
       }
+      placeNew(current, cy.nodes().not(base), base);
     } else {
       // A circle first, so the force-directed pass starts from the same
       // place on every load and draws the same picture.
@@ -1322,7 +2007,6 @@
     // ── The toolbar ─────────────────────────────────────────────────────
     const filters = payload.filters || {};
     const minWeight = typeof filters.min_weight === "number" ? filters.min_weight : WEIGHT_FLOOR;
-    const groups = Array.isArray(filters.provenance) ? filters.provenance : PROVENANCE_GROUPS;
 
     const slider = document.querySelector("[data-kgraph-min-weight]");
     const sliderValue = document.querySelector("[data-kgraph-min-weight-value]");
@@ -1352,50 +2036,80 @@
       });
     }
     const hiddenCount = document.querySelector("[data-kgraph-weight-hidden]");
-    if (hiddenCount) {
-      const hidden = (payload.hidden && payload.hidden.by_weight) || 0;
-      hiddenCount.textContent = plural(hidden, "edge", "edges") + " below " + weightText(minWeight) + " hidden";
+    const fullToggle = document.querySelector("[data-kgraph-full-toggle]");
+
+    // The provenance toggles as the view on screen offers them: a swap may
+    // bring the fieldset in, or new counts (D16), so each is bound once,
+    // whenever it arrives.
+    function provenanceToggles() {
+      return Array.prototype.slice.call(document.querySelectorAll("[data-kgraph-provenance]"));
+    }
+    function bindProvenance() {
+      provenanceToggles().forEach(function (toggle) {
+        if (toggle.kgraphBound) return;
+        toggle.kgraphBound = true;
+        toggle.addEventListener("change", function () {
+          const filters = current.filters || {};
+          const groups = Array.isArray(filters.provenance) ? filters.provenance : PROVENANCE_GROUPS;
+          const group = toggle.dataset.kgraphProvenance;
+          const next = groups.filter(function (name) { return name !== group; });
+          if (toggle.checked) next.push(group);
+          navigate({ provenance: provenanceValue(next) });
+        });
+      });
     }
 
-    const toggles = Array.prototype.slice.call(
-      document.querySelectorAll("[data-kgraph-provenance]")
-    );
-    toggles.forEach(function (toggle) {
-      toggle.checked = groups.indexOf(toggle.dataset.kgraphProvenance) !== -1;
-    });
-    const checked = toggles.filter(function (toggle) { return toggle.checked; });
-    toggles.forEach(function (toggle) {
-      // The last group on cannot be turned off: an empty list means "all".
-      toggle.disabled = checked.length === 1 && toggle.checked;
-      toggle.addEventListener("change", function () {
-        const group = toggle.dataset.kgraphProvenance;
-        const next = groups.filter(function (name) { return name !== group; });
-        if (toggle.checked) next.push(group);
-        navigate({ provenance: provenanceValue(next) });
+    // Everything the toolbar says or allows from the view on screen: the
+    // hidden count, the provenance toggles, the depths' would-be counts —
+    // and, while an expansion or collapse is out, every control that
+    // changes the graph or the presentation disabled (D16). Search, pan,
+    // zoom and the disclosures stay live.
+    function renderControls() {
+      const busy = !!graphRequest;
+      const filters = current.filters || {};
+      const groups = Array.isArray(filters.provenance) ? filters.provenance : PROVENANCE_GROUPS;
+      if (hiddenCount) {
+        const hidden = (current.hidden && current.hidden.by_weight) || 0;
+        hiddenCount.textContent = plural(hidden, "edge", "edges") + " below " + weightText(minWeight) + " hidden";
+      }
+      const toggles = provenanceToggles();
+      toggles.forEach(function (toggle) {
+        toggle.checked = groups.indexOf(toggle.dataset.kgraphProvenance) !== -1;
       });
-    });
+      const checked = toggles.filter(function (toggle) { return toggle.checked; });
+      toggles.forEach(function (toggle) {
+        // The last group on cannot be turned off: an empty list means "all".
+        toggle.disabled = busy || (checked.length === 1 && toggle.checked);
+      });
+      const wouldBe = current.would_be_nodes || {};
+      document.querySelectorAll("[data-kgraph-depth-count]").forEach(function (count) {
+        const level = count.dataset.kgraphDepthCount;
+        const notes = wouldBe[level];
+        count.textContent = Number(level) !== current.depth && typeof notes === "number"
+          ? ": " + plural(notes, "note", "notes")
+          : "";
+      });
+      if (slider) slider.disabled = busy;
+      document.querySelectorAll("[data-kgraph-depth], [data-kgraph-colour]").forEach(function (radio) {
+        radio.disabled = busy;
+      });
+      if (fullToggle) fullToggle.disabled = busy;
+    }
 
-    const wouldBe = payload.would_be_nodes || {};
+    bindProvenance();
     document.querySelectorAll("[data-kgraph-depth]").forEach(function (radio) {
       radio.checked = Number(radio.value) === payload.depth;
       radio.addEventListener("change", function () {
         if (radio.checked) navigate({ depth: radio.value });
       });
     });
-    document.querySelectorAll("[data-kgraph-depth-count]").forEach(function (count) {
-      const level = count.dataset.kgraphDepthCount;
-      const notes = wouldBe[level];
-      count.textContent = Number(level) !== payload.depth && typeof notes === "number"
-        ? ": " + plural(notes, "note", "notes")
-        : "";
-    });
-
     document.querySelectorAll("[data-kgraph-colour]").forEach(function (radio) {
       radio.checked = radio.value === mode;
       radio.addEventListener("change", function () {
         if (radio.checked) navigate({ colour: radio.value === "type" ? "type" : null });
       });
     });
+    renderControls();
 
     const search = document.querySelector("[data-kgraph-search]");
     const searchCount = document.querySelector("[data-kgraph-search-count]");
@@ -1419,49 +2133,59 @@
     applySearch();
 
     // ── The canvas's key: the text legend's lines, the colours present ──
-    const edgeKey = document.querySelector("[data-kgraph-key-edges]");
-    if (edgeKey) {
-      edgeKey.replaceChildren.apply(edgeKey, (payload.legend || []).map(function (line) {
-        const cssClass = line["class"];
-        const layer = cssClass === "kedge-wiki-link" || cssClass === "kedge-provenance";
-        const name = layer
-          ? (cssClass === "kedge-wiki-link" ? "wiki-link" : "provenance") + " (layer)"
-          : line.type;
-        const colour = EDGE_COLOURS[cssClass] || EDGE_COLOURS["kedge-unknown"];
-        return keyItem(swatch(colour, strokeOfClass(cssClass)), name, { keyType: line.type });
-      }));
-    }
-    const nodeKey = document.querySelector("[data-kgraph-key-nodes]");
-    if (nodeKey) {
-      const items = [element("li", "kgraph-key-heading",
-        "Colour: " + (mode === "type" ? "note type" : "namespace"))];
-      // Every value present, most nodes first; one past the palette's slots
-      // is named with the neutral it shares.
-      colours.values.forEach(function (value) {
-        items.push(keyItem(swatch(colours.slots[value] || NODE_NEUTRAL), value, { keyValue: value }));
-      });
-      const unvalued = payload.nodes.some(function (node) {
-        return colourValue(node, mode) === null;
-      });
-      if (unvalued) {
-        items.push(keyItem(swatch(NODE_NEUTRAL), "none (not found or not read)", { keyValue: "" }));
+    // Redrawn from the view on screen after each swap (D16).
+    function renderKey() {
+      const edgeKey = document.querySelector("[data-kgraph-key-edges]");
+      if (edgeKey) {
+        edgeKey.replaceChildren.apply(edgeKey, (current.legend || []).map(function (line) {
+          const cssClass = line["class"];
+          const layer = cssClass === "kedge-wiki-link" || cssClass === "kedge-provenance";
+          const name = layer
+            ? (cssClass === "kedge-wiki-link" ? "wiki-link" : "provenance") + " (layer)"
+            : line.type;
+          const colour = EDGE_COLOURS[cssClass] || EDGE_COLOURS["kedge-unknown"];
+          return keyItem(swatch(colour, strokeOfClass(cssClass)), name, { keyType: line.type });
+        }));
       }
-      items.push(element("li", "kgraph-key-heading", "Size: connections in this view"));
-      nodeKey.replaceChildren.apply(nodeKey, items);
+      const nodeKey = document.querySelector("[data-kgraph-key-nodes]");
+      if (nodeKey) {
+        const items = [element("li", "kgraph-key-heading",
+          "Colour: " + (mode === "type" ? "note type" : "namespace"))];
+        // Every value present, most nodes first; one past the palette's slots
+        // is named with the neutral it shares.
+        rankedValues(current.nodes, mode).values.forEach(function (value) {
+          items.push(keyItem(swatch(colourOf(value)), value, { keyValue: value }));
+        });
+        const unvalued = current.nodes.some(function (node) {
+          return colourValue(node, mode) === null;
+        });
+        if (unvalued) {
+          items.push(keyItem(swatch(NODE_NEUTRAL), "none (not found or not read)", { keyValue: "" }));
+        }
+        items.push(element("li", "kgraph-key-heading", "Size: connections in this view"));
+        nodeKey.replaceChildren.apply(nodeKey, items);
+      }
+      const markKey = document.querySelector("[data-kgraph-key-marks]");
+      if (markKey) {
+        const marks = [];
+        const present = function (name) { return cy.elements("." + name).length > 0; };
+        if (present("ghost")) marks.push(["ghost", "dashed: note not found"]);
+        if (present("pending")) marks.push(["pending", "double ring: facts pending"]);
+        if (present("quarantined")) marks.push(["quarantined", "red ring: quarantined"]);
+        if (present("archived")) marks.push(["archived", "greyed: archived"]);
+        if (present("partial")) marks.push(["partial", "faint edge: updated by event; details pending"]);
+        if (present("adds-notes")) {
+          marks.push(["adds-notes", "+N: showing its neighbours adds N notes to this view"]);
+        }
+        if (present("adds-edges")) {
+          marks.push(["adds-edges", "↔: showing its neighbours adds only edges between notes already drawn"]);
+        }
+        markKey.replaceChildren.apply(markKey, marks.map(function (mark) {
+          return keyItem(null, mark[1], { keyMark: mark[0] });
+        }));
+      }
     }
-    const markKey = document.querySelector("[data-kgraph-key-marks]");
-    if (markKey) {
-      const marks = [];
-      const present = function (name) { return cy.elements("." + name).length > 0; };
-      if (present("ghost")) marks.push(["ghost", "dashed: note not found"]);
-      if (present("pending")) marks.push(["pending", "double ring: facts pending"]);
-      if (present("quarantined")) marks.push(["quarantined", "red ring: quarantined"]);
-      if (present("archived")) marks.push(["archived", "greyed: archived"]);
-      if (present("partial")) marks.push(["partial", "faint edge: updated by event; details pending"]);
-      markKey.replaceChildren.apply(markKey, marks.map(function (mark) {
-        return keyItem(null, mark[1], { keyMark: mark[0] });
-      }));
-    }
+    renderKey();
 
     // ── The fit: everything in the usable area, never below readable ────
     // Cytoscape's own `fit` pads every side alike; this one fits to the
@@ -1556,7 +2280,78 @@
     // disclosure or the pill) and the selection kept in what is left.
     // A fit still in flight is fitted again to the new geometry, not
     // stopped where it has got to.
+    // A note's first tap opens its panel at once, and in full page that
+    // panel (and the drawer it opens) pans the canvas to keep the note
+    // clear. Inside the double-click window that pan would move the note
+    // from under the second tap, which then lands beside it and is no
+    // double click (D16): until the window ends every such move is held,
+    // and the latest is made then. Held, the canvas counts as moving.
+    let tapWindowEnds = 0;
+    let heldMove = null;
+    function holdForTap(move) {
+      const wait = tapWindowEnds - Date.now();
+      if (!(wait > 0)) return false;
+      if (!heldMove) {
+        container.dataset.canvasMotion = "moving";
+        setTimeout(function () {
+          const next = heldMove;
+          heldMove = null;
+          if (!inFlight) container.dataset.canvasMotion = "still";
+          if (next) next();
+        }, wait);
+      }
+      heldMove = move;
+      return true;
+    }
+
+    // …and the panel itself, opened over the canvas as a drawer or sheet,
+    // would take the second press if it opened over the very note the first
+    // tap hit: then, and only then, it is kept out of sight — and so out of
+    // the pointer's way — until the window ends. Opened anywhere else it is
+    // live at once, its links clickable the moment they show.
+    let tappedBox = null;
+    let concealTimer = null;
+    function revealPanel() {
+      if (concealTimer !== null) {
+        clearTimeout(concealTimer);
+        concealTimer = null;
+      }
+      if (!host || !host.style || host.style.visibility !== "hidden") return;
+      host.style.visibility = "";
+      // The heading the open could not focus while hidden.
+      const heading = within(host, "[data-kgraph-panel-heading]");
+      const active = document.activeElement;
+      if (heading && typeof heading.focus === "function" && (!active || active === document.body)) {
+        heading.focus({ preventScroll: true });
+      }
+    }
+    function concealOverTap() {
+      const wait = tapWindowEnds - Date.now();
+      if (!(wait > 0) || !tappedBox || !host || !host.style ||
+          typeof host.getBoundingClientRect !== "function") return;
+      const box = host.getBoundingClientRect();
+      const over = { x1: box.left, x2: box.right, y1: box.top, y2: box.bottom };
+      if (apart(over, tappedBox)) return;
+      host.style.visibility = "hidden";
+      if (concealTimer === null) concealTimer = setTimeout(revealPanel, wait);
+    }
+    // Where the tapped note is drawn, in the window: what the panel must not
+    // open over while the second press may still come.
+    function noteOnScreen(node) {
+      if (typeof container.getBoundingClientRect !== "function") return null;
+      const frame = container.getBoundingClientRect();
+      const box = node.renderedBoundingBox({ includeLabels: false, includeOverlays: false });
+      if (!Number.isFinite(box.x1) || !Number.isFinite(box.y1)) return null;
+      return {
+        x1: frame.left + box.x1,
+        x2: frame.left + box.x2,
+        y1: frame.top + box.y1,
+        y2: frame.top + box.y2
+      };
+    }
+
     function geometryChanged(animate) {
+      if (holdForTap(function () { geometryChanged(true); })) return;
       cy.resize();
       if (inFlight && inFlight.fit) fitView(animate);
       else revealSelection(animate);
@@ -1597,7 +2392,25 @@
       });
     }
 
+    // What the previous tap was on, whatever it was on. Cytoscape's
+    // `dbltap` is two taps in time, on whatever the second hit — even when
+    // the first hit another note or the background (`graph.js` reads it so
+    // too) — so only a pair on ONE note is that note's double click; any
+    // other pair is two single clicks, each answered as its tap. Recorded on
+    // the raw `tap`, which always comes before the `dbltap` that may follow.
+    let previousTapId = "";
+    let latestTapId = "";
+    cy.on("tap", function (event) {
+      const target = event.target;
+      previousTapId = latestTapId;
+      latestTapId = target && target !== cy && typeof target.id === "function" ? target.id() : "";
+    });
+
     cy.on("tap", "node", function (event) {
+      // A panel action: inert while an expansion or collapse is out (D16).
+      if (graphRequest) return;
+      tapWindowEnds = Date.now() + DOUBLE_TAP_MS;
+      tappedBox = noteOnScreen(event.target);
       const pid = event.target.data("pid");
       const now = new URLSearchParams(window.location.search);
       // A node opened from a view drawn for an edge pins that edge, as the
@@ -1609,17 +2422,43 @@
     });
     cy.on("tap", "edge", function (event) {
       // Only a typed row has an edge panel; a layer pair is not one.
-      if (!event.target.hasClass("typed")) return;
+      if (graphRequest || !event.target.hasClass("typed")) return;
       light(event.target);
       openPanel({ edge: event.target.data("pid"), selected: null, pin: null });
     });
     cy.on("tap", function (event) {
-      if (event.target === cy) light(null);
+      if (event.target === cy && !graphRequest) light(null);
+    });
+
+    // A double click expands a note the server says can (D16): its first
+    // tap selected it, as a single click does, and the expansion's swap
+    // supersedes that panel request. A note over the cap sends nothing — its
+    // panel says why and offers the reload that asks again — and an
+    // expanded, complete or focus note (or one in a scoped view) does
+    // nothing more than its taps did. Collapse is the panel's link.
+    cy.on("dbltap", "node", function (event) {
+      const node = event.target;
+      // The pair is over: what it held may move now, and a panel kept out
+      // of sight shows.
+      tapWindowEnds = 0;
+      revealPanel();
+      if (previousTapId !== node.id()) return;
+      const pid = node.data("pid");
+      const shown = current.nodes.filter(function (each) { return each.id === pid; })[0];
+      const expansion = shown && shown.expansion;
+      if (!expansion || expansion.state !== "available") return;
+      const href = pageUrl(expandQuery(pid, function (edgeId) {
+        return byPid(cy.edges(".typed"), edgeId).length > 0;
+      }));
+      if (!changeGraph(href, null, pid)) window.location.assign(href);
     });
 
     // ── Full page: the toggle, the disclosures, the panel (D17) ─────────
     function setFullPage(full) {
       if (full === fullPage || retired) return;
+      // Disabled while an expansion or collapse is out; were it reached
+      // anyway, that request is retired as a Back would retire it (D16).
+      retireGraphRequest();
       abandonPending();
       lightFromUrl();
       applyFrame(full);
@@ -1652,6 +2491,8 @@
       });
 
     panelMoved = function (opened) {
+      if (opened) concealOverTap();
+      if (opened && holdForTap(function () { panelMoved(true); })) return;
       if (!opened) light(null);
       // Opened, the selection is kept clear by a pan alone (D12); closed,
       // room given back.
@@ -1682,6 +2523,279 @@
       [stage, toolbar, key, host].forEach(function (elt) { if (elt) observer.observe(elt); });
     }
 
+    // ── Expansion and collapse in place (D16) ───────────────────────────
+    // One request at a time. `changeGraph` retires the panel request in
+    // flight, disables what would change the graph or the presentation,
+    // and fetches the page itself at the new address (no route of its
+    // own). The answer is read and checked whole before anything on screen
+    // changes: a 200 page whose payload parses as a drawn focus view, not
+    // refused, with a rendered panel host. Then, in one synchronous step,
+    // its text, panel and render id, payload, toolbar counts and picture
+    // replace this page's, the address is pushed and the controls come
+    // back. Anything else — offline, refused, the render cap's 503, a
+    // network error — leaves the view and the address as they were, says
+    // why under the toolbar's buttons, and links to the address as a page.
+    const status = document.querySelector("[data-kgraph-graph-status]");
+
+    function showStatus(reason, href) {
+      if (!status) return;
+      const link = element("a", "", "Load that view as a page");
+      link.setAttribute("href", href);
+      status.replaceChildren(element("span", "", "The graph was not changed: " + reason + " "), link);
+      if (status.hidden) {
+        status.hidden = false;
+        overlaysMoved(true);
+      }
+    }
+
+    function hideStatus() {
+      if (!status || status.hidden) return;
+      status.hidden = true;
+      status.replaceChildren();
+      overlaysMoved(true);
+    }
+
+    busyChanged = function () {
+      const busy = !!graphRequest;
+      container.dataset.canvasRequest = busy ? "busy" : "idle";
+      if (stage && typeof stage.setAttribute === "function") {
+        stage.setAttribute("aria-busy", busy ? "true" : "false");
+      }
+      renderControls();
+    };
+
+    function failure(reason) {
+      const error = new Error(reason);
+      error.kgraphReason = reason;
+      return error;
+    }
+
+    // The answer, checked whole: anything short of a drawn, unrefused focus
+    // view with its panel host's render id is a failure, read as nothing.
+    function readView(text) {
+      const doc = new window.DOMParser().parseFromString(text, "text/html");
+      const source = doc.querySelector("[data-knowledge-graph-payload]");
+      if (!source) throw failure("no graph came back (Lithos may be offline).");
+      let next = null;
+      try {
+        next = JSON.parse(source.textContent);
+      } catch (error) {
+        next = null;
+      }
+      if (!next || typeof next !== "object") throw failure("the answer could not be read.");
+      if (next.refusal) {
+        throw failure("that view was refused. " + (next.refusal.message || ""));
+      }
+      if (next.mode !== "focus" || !Array.isArray(next.nodes) || !next.nodes.length) {
+        throw failure("the answer drew no graph.");
+      }
+      if (!wholeView(next)) throw failure("the answer could not be read.");
+      const nextHost = doc.querySelector("#kgraph-panel");
+      const render = nextHost ? nextHost.getAttribute("data-kgraph-render") || "" : "";
+      if (!render) throw failure("the answer could not be read.");
+      return { doc: doc, payload: next, text: source.textContent, host: nextHost, render: render };
+    }
+
+    function fetchView(request) {
+      return window.fetch(request.href, {
+        credentials: "same-origin",
+        headers: { Accept: "text/html" },
+        signal: request.controller ? request.controller.signal : undefined
+      }).then(function (response) {
+        if (response.status === 503) throw failure("Lens is drawing too many views at once.");
+        if (response.status !== 200) throw failure("the server answered " + response.status + ".");
+        return response.text();
+      }, function () {
+        throw failure("the request did not complete.");
+      }).then(readView);
+    }
+
+    function adopt(node) {
+      return typeof document.importNode === "function" ? document.importNode(node, true) : node;
+    }
+
+    // `selector`'s element as the answer has it: replaced, taken out, or
+    // put in by `place`. Answers what was put in.
+    function swapPart(doc, selector, place) {
+      const old = document.querySelector(selector);
+      const next = doc.querySelector(selector);
+      const node = next ? adopt(next) : null;
+      if (old && node) old.replaceWith(node);
+      else if (old) old.remove();
+      else if (node) place(node);
+      return node;
+    }
+
+    // The answer's text in place of this page's: the scope line where it
+    // is (above the stage inline, below it in full page), the sections
+    // between the stage and the payload as the answer has them, the payload,
+    // the panel and its render id, and the toolbar's view-dependent parts.
+    // Every server-written link in them is the answer's, so every panel
+    // request after this one names the new render. htmx is told of each.
+    function swapText(view) {
+      const doc = view.doc;
+      const inserted = [];
+      const keep = function (node) { if (node) inserted.push(node); };
+      keep(swapPart(doc, "[data-kgraph-scope]", function () {}));
+      // The answer's own address for its view: the next double click's base.
+      const page = document.querySelector("[data-knowledge-graph]");
+      const nextPage = doc.querySelector("[data-knowledge-graph]");
+      const address = nextPage ? nextPage.getAttribute("data-kgraph-address") : null;
+      if (page && address) page.setAttribute("data-kgraph-address", address);
+      const source = document.querySelector("[data-knowledge-graph-payload]");
+      TEXT_SECTIONS.forEach(function (selector) {
+        const old = document.querySelector(selector);
+        if (old) old.remove();
+      });
+      TEXT_SECTIONS.forEach(function (selector) {
+        const next = doc.querySelector(selector);
+        if (!next || !source) return;
+        const node = adopt(next);
+        source.before(node);
+        keep(node);
+      });
+      if (source) source.textContent = view.text;
+      host.innerHTML = view.host.innerHTML;
+      host.dataset.kgraphRender = view.render;
+      if ("scrollTop" in host) host.scrollTop = 0;
+      keep(host);
+      const pill = document.querySelector("[data-kgraph-refresh-pill]");
+      keep(swapPart(doc, "[data-kgraph-unresolved-count]", function (node) {
+        if (pill) pill.before(node);
+      }));
+      keep(swapPart(doc, "[data-kgraph-provenance-group]", function (node) {
+        if (hiddenCount) hiddenCount.after(node);
+      }));
+      if (window.htmx && typeof window.htmx.process === "function") {
+        inserted.forEach(function (node) { window.htmx.process(node); });
+      }
+    }
+
+    // An expansion's notes in view (D16): the note expanded and the notes
+    // it brought, panned to in the usable area from where the view is (or
+    // is going) — zoomed out only as far as they need and never below
+    // MIN_READABLE_ZOOM, and in no further than that floor (an operator
+    // zoomed out past it is brought back to it); centred on the note when
+    // they still do not fit, the pan hint saying what is outside. Answers
+    // whether it moved.
+    function revealNodes(nodes, animate) {
+      if (!nodes.length) return false;
+      const base = inFlight ? inFlight.target : { zoom: cy.zoom(), pan: cy.pan() };
+      const floor = Math.max(MIN_READABLE_ZOOM, cy.minZoom());
+      const ceiling = Math.max(base.zoom, floor);
+      makeRoom(ceiling);
+      const box = nodes.boundingBox();
+      const drawn = {
+        x1: base.zoom * box.x1 + base.pan.x,
+        x2: base.zoom * box.x2 + base.pan.x,
+        y1: base.zoom * box.y1 + base.pan.y,
+        y2: base.zoom * box.y2 + base.pan.y
+      };
+      if (base.zoom >= floor && drawn.x1 >= usable.x1 && drawn.x2 <= usable.x2 &&
+          drawn.y1 >= usable.y1 && drawn.y2 <= usable.y2) return false;
+      const roomW = Math.max(usable.x2 - usable.x1 - 2 * FIT_PADDING, 1);
+      const roomH = Math.max(usable.y2 - usable.y1 - 2 * FIT_PADDING, 1);
+      const zoom = Math.max(Math.min(ceiling, roomW / box.w, roomH / box.h), floor);
+      let centre = centreOf(box);
+      if (box.w * zoom > roomW || box.h * zoom > roomH) centre = centreOf(nodes[0].boundingBox());
+      const middle = centreOf(usable);
+      moveTo({
+        zoom: zoom,
+        pan: { x: middle.x - zoom * centre.x, y: middle.y - zoom * centre.y }
+      }, animate);
+      return true;
+    }
+
+    // The answer committed, in one synchronous step: text and panel, the
+    // picture diffed by identity (survivors where they stand, the new
+    // placed beside their anchors, the labels placed again), the controls,
+    // key, search and counts — and only then the address pushed, the
+    // selection lit from it and the view moved.
+    function commit(view, request, built) {
+      swapText(view);
+      current = view.payload;
+      panelInvoker = null;
+      const added = applyElements(current, built);
+      cy.nodes().addClass("widest");
+      placeNew(current, added, cy.nodes().not(added));
+      relabel();
+      cy.nodes().removeClass("widest");
+      bindProvenance();
+      busyChanged();
+      renderKey();
+      applySearch();
+      container.dataset.canvasNodes = String(cy.nodes().length);
+      container.dataset.canvasEdges = String(cy.edges().length);
+      // The whole view is in: only now is its address pushed.
+      const target = new URL(request.href, window.location.href).href;
+      if (withoutFragment(target) !== withoutFragment(window.location.href)) {
+        window.history.pushState({ kgraph: true }, "", request.href);
+      }
+      syncRefresh();
+      shownHref = window.location.href;
+      lightFromUrl();
+      const anchor = request.anchor ? byPid(cy.nodes(), request.anchor) : cy.collection();
+      const brought = anchor.length
+        ? anchor.union(added.filter(function (node) { return node.data("via") === request.anchor; }))
+        : anchor;
+      if (!revealNodes(brought, true)) revealSelection(true);
+      showPanHint();
+      // The link used is gone with the text it was in: the focus goes to
+      // the panel the view came back with.
+      const heading = within(host, "[data-kgraph-panel-heading]");
+      if (heading && typeof heading.focus === "function") heading.focus({ preventScroll: true });
+    }
+
+    changeGraph = function (href, invoker, anchor) {
+      if (!href) return false;
+      // Inert while one is out, and once a Back or Forward is reloading.
+      if (retired || graphRequest) return true;
+      if (current.mode !== "focus" || typeof window.fetch !== "function" ||
+          typeof window.DOMParser !== "function") return false;
+      const target = new URL(href, window.location.href);
+      const expands = invoker && typeof invoker.getAttribute === "function" &&
+        invoker.getAttribute("data-kgraph-expand") !== null;
+      const request = {
+        href: target.pathname + target.search,
+        controller: typeof window.AbortController === "function" ? new window.AbortController() : null,
+        anchor: anchor || (expands ? queryValue(target.searchParams, "expand") : "")
+      };
+      abandonPending();
+      graphRequest = request;
+      hideStatus();
+      busyChanged();
+      fetchView(request).then(function (view) {
+        if (graphRequest !== request) return;
+        graphRequest = null;
+        let built = null;
+        try {
+          built = elementsOf(view.payload);
+        } catch (error) {
+          built = null;
+        }
+        if (!built) {
+          // Nothing on the page has changed: the view stays, with why.
+          busyChanged();
+          showStatus("the answer could not be read.", request.href);
+          return;
+        }
+        try {
+          commit(view, request, built);
+        } catch (error) {
+          // A commit that broke part way would leave a view no address
+          // names: the address, not yet pushed, is drawn again whole.
+          retired = true;
+          window.location.reload();
+        }
+      }, function (error) {
+        if (graphRequest !== request) return;
+        graphRequest = null;
+        busyChanged();
+        showStatus((error && error.kgraphReason) || "the request did not complete.", request.href);
+      });
+      return true;
+    };
+
     // An address spelling the presentation otherwise (` full `, a repeat,
     // `inline`) takes the server's spelling, so it and every link to it are
     // one address.
@@ -1694,9 +2808,12 @@
     container.dataset.canvasNodes = String(cy.nodes().length);
     container.dataset.canvasEdges = String(cy.edges().length);
 
+    container.dataset.canvasRequest = "idle";
+
     window.LithosLensKnowledgeGraph = {
       cy: cy,
-      payload: payload,
+      // The view on screen: each swap's (D16).
+      get payload() { return current; },
       edgeColours: EDGE_COLOURS,
       resolvedColour: RESOLVED,
       nodePalette: NODE_PALETTE,
@@ -1706,6 +2823,7 @@
       minReadableZoom: MIN_READABLE_ZOOM,
       withCanvas: withCanvas,
       fullPage: function () { return fullPage; },
+      busy: function () { return !!graphRequest; },
       usableArea: function () { return Object.assign({}, usable); }
     };
   }
@@ -1736,6 +2854,7 @@
     document.addEventListener("htmx:afterSwap", pushAfterSwap);
     document.addEventListener("keydown", onKeydown);
     document.addEventListener("click", onCloseClick);
+    document.addEventListener("click", onGraphLinkClick);
     window.addEventListener("popstate", onTravel);
     listen();
   }

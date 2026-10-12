@@ -2476,6 +2476,23 @@ a.blocker-chip:focus-visible {
   color: var(--ink);
 }
 
+/* Why an expansion or collapse left the view as it was (D16): a line of its
+   own across the toolbar, with the link that loads that view as a page. */
+.kgraph-graph-status {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.kgraph-graph-status[hidden] {
+  display: none;
+}
+
+/* An expansion or collapse in flight: the canvas still pans and zooms. */
+.kgraph-stage[aria-busy="true"] .kgraph-canvas {
+  cursor: progress;
+}
+
 .kgraph-panel-close {
   color: var(--muted);
   float: right;

@@ -5,7 +5,10 @@
   text and shows no empty box. The script fills what comes from the payload
   (the slider's value, the hidden count, each depth's would-be count, the
   key) and sets each control from it; every control navigates (S4 D3), so
-  the server re-renders text, payload and canvas together.
+  the server re-renders text, payload and canvas together. Expansion and
+  collapse swap the view in place (D16): the view-dependent parts here —
+  the unresolved count and the provenance fieldset — are replaced from the
+  answer, and every control is disabled while that request is out.
 
   Full page (D17) is the script's: "Full page" / "Exit full page" switches
   in place; "Text view" jumps to the text under the canvas; below 768px the
@@ -28,6 +31,10 @@
     <button type="button" class="kgraph-full-toggle" data-kgraph-full-toggle aria-pressed="false">Full page</button>
     <a class="kgraph-text-link" href="#kgraph-text" data-kgraph-text-link hidden>Text view</a>
     <button type="button" class="kgraph-disclosure" data-kgraph-controls-toggle aria-expanded="false" aria-controls="kgraph-controls">Controls</button>
+
+    {#- Why an expansion or collapse left the view as it was (D16), with a
+        plain link to that view as a page: the script's to fill. -#}
+    <p class="kgraph-graph-status" data-kgraph-graph-status role="status" hidden></p>
   </div>
 
   <div class="kgraph-controls" id="kgraph-controls" data-kgraph-controls>
