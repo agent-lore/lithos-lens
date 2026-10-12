@@ -971,6 +971,27 @@ test("a note opened from search results goes back to those results", async ({
   ).toBeVisible();
 });
 
+test("a long unbroken search query does not widen the page", async ({
+  page,
+}) => {
+  // The results heading echoes the query. Without a break rule, a single
+  // token longer than the line ran past the landing's bounded track: 500 "x"
+  // at 768px made a 6056px document. The form keeps its own bound either way.
+  const width = 768;
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto(`/knowledge?q=${"x".repeat(500)}`);
+
+  await expect(
+    page.getByRole("heading", { level: 2, name: /^Results for/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Search" }),
+  ).toBeInViewport();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(width);
+});
+
 test("quarantined note is visibly quarantined (computed style)", async ({
   page,
 }) => {
