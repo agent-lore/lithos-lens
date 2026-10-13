@@ -991,6 +991,29 @@ test("a long unbroken search query does not widen the page", async ({
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(width);
 });
+test("a long unbroken filter does not widen the page", async ({ page }) => {
+  // The active-filter line echoes the namespace on the landing and the query
+  // and prefix on the tags page. Without a break rule the same token that
+  // widened the results heading widened these: 500 "x" at 768px made a
+  // 4071px document on each.
+  const width = 768;
+  const token = "x".repeat(500);
+  await page.setViewportSize({ width, height: 900 });
+
+  for (const url of [
+    `/knowledge?namespace=${token}`,
+    `/knowledge/tags?q=${token}`,
+    `/knowledge/tags?prefix=${token}`,
+  ]) {
+    await page.goto(url);
+    await expect(page.locator(".knowledge-active-filter")).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+      url,
+    ).toBeLessThanOrEqual(width);
+  }
+});
+
 
 test("quarantined note is visibly quarantined (computed style)", async ({
   page,

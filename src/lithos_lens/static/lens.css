@@ -1996,8 +1996,12 @@ a.blocker-chip:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* The filter line echoes the namespace, tag, prefix or query: like the
+   results heading, a token longer than the line must break, not widen the
+   page. */
 .knowledge-active-filter {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 /* The namespace filter row (§7.1): wraps rather than widening the page. */
