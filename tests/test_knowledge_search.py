@@ -1072,6 +1072,31 @@ def test_results_heading_breaks_a_long_unbroken_query(
     )
 
 
+def test_active_filter_line_breaks_a_long_unbroken_namespace(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The filter line echoes the namespace (and the tags page its query and
+    prefix), so like the results heading a token longer than the line must
+    break: 500 ``x`` as the namespace at 768px made a 4071px-wide document.
+    The browser-truth check is in the Playwright smoke suite ("a long unbroken
+    filter does not widen the page"); this guards the markup and the rule.
+    """
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?namespace=" + "x" * 500)
+
+    assert response.status_code == 200
+    assert '<p class="knowledge-active-filter">' in response.text
+    assert "namespace " + "x" * 500 in response.text
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    assert re.search(
+        r"overflow-wrap:\s*anywhere;", _css_rule(css, ".knowledge-active-filter")
+    )
+
+
 def test_a_failed_chip_read_leaves_only_that_row_chipless(
     lithos_lens_config_env: Path,
 ) -> None:
