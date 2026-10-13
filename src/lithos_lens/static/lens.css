@@ -1990,6 +1990,12 @@ a.blocker-chip:focus-visible {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The heading echoes the query: a bounded track does not stop a token longer
+   than the line from running past it, so break that token instead. */
+.knowledge-results-heading {
+  overflow-wrap: anywhere;
+}
+
 .knowledge-active-filter {
   margin: 0;
 }

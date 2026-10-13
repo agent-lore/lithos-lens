@@ -1044,6 +1044,34 @@ def test_compact_chip_row_stylesheet_is_one_smaller_line_that_scrolls() -> None:
         ), grid
 
 
+def test_results_heading_breaks_a_long_unbroken_query(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The heading echoes the query, so a token longer than the line must break.
+
+    The landing's bounded track keeps the search form inside the viewport, but
+    a heading wider than that track still overflowed it: 500 ``x`` at 768px
+    made a 6056px-wide document. The browser-truth check is in the Playwright
+    smoke suite ("a long unbroken search query does not widen the page"); this
+    guards the markup and the rule.
+    """
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=" + "x" * 500)
+
+    assert response.status_code == 200
+    assert (
+        '<h2 class="knowledge-results-heading">Results for &ldquo;' + "x" * 500
+    ) in response.text
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    assert re.search(
+        r"overflow-wrap:\s*anywhere;", _css_rule(css, ".knowledge-results-heading")
+    )
+
+
 def test_a_failed_chip_read_leaves_only_that_row_chipless(
     lithos_lens_config_env: Path,
 ) -> None:

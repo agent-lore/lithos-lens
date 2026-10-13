@@ -104,7 +104,7 @@
         <span>{{ error }}</span>
       </section>
     {% elif search_results is not none %}
-      <h2>Results for &ldquo;{{ query }}&rdquo;</h2>
+      <h2 class="knowledge-results-heading">Results for &ldquo;{{ query }}&rdquo;</h2>
       {% if search_results %}
         {% include "knowledge/chips_capped.html" %}
         <ul class="knowledge-cards">
