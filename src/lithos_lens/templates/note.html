@@ -159,6 +159,23 @@
               {% if note_meta.updated_at %}<time datetime="{{ note_meta.updated_at }}">Updated {{ note_meta.updated_at }}</time>{% endif %}
             </div>
           {% endif %}
+          {% if note_meta and (note_meta.source_url or note_meta.source_text) %}
+            <p class="note-source">Source:
+              {% if note_meta.source_url -%}
+                <a href="{{ note_meta.source_url }}" rel="noopener noreferrer">{{ note_meta.source_url }}</a>
+              {%- else -%}
+                {{ note_meta.source_text }}
+              {%- endif %}
+            </p>
+          {% endif %}
+          {#- An empty `## Archive` section reads as a broken ingest; say why the
+              body is missing, and where the article is when there is a link. -#}
+          {% if note_meta and note_meta.archive_notice %}
+            <p class="note-archive-notice" data-archive-notice>
+              {{ note_meta.archive_notice }}
+              {%- if note_meta.source_url %} Read the original at the source link.{% endif %}
+            </p>
+          {% endif %}
         </header>
         {#- Unresolved contradictions from the edge-table snapshot (K2 D13),
             one line each; absent when the snapshot is unreadable or refused. -#}

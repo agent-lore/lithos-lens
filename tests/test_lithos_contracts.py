@@ -325,6 +325,9 @@ REQUIRED_RESPONSE_VARIANTS: dict[str, set[str]] = {
     "lithos_task_complete": {"nothing_released"},
     "lithos_task_reopen": {"cancelled_reopen"},
     "lithos_task_create": {"no_links"},
+    # An ingested note: a string source_url and Influx's archive-outcome tags,
+    # which the note page's source line and archive notice are built from.
+    "lithos_read": {"influx_archive_terminal"},
 }
 
 #: The EXACT key set of each canonical success payload. Exact rather than a
@@ -1022,6 +1025,10 @@ RESPONSE_VARIANT_SPECS[("lithos_edge_list", "filtered")] = (
 RESPONSE_VARIANT_SPECS[("lithos_edge_list", "empty")] = (
     lambda c: c.edge_list(type="no-such-type"),
     lambda result, payload: _assert_equal(result, ()),
+)
+RESPONSE_VARIANT_SPECS[("lithos_read", "influx_archive_terminal")] = (
+    lambda c: c.read_note("22222222-2222-4222-8222-222222222222"),
+    _check_note,
 )
 
 

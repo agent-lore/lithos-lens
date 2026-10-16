@@ -23,7 +23,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_graph_typed` | M | 1 | 4 |
 | `lithos_lens.knowledge_graph_view` | L | 10 | 8 |
 | `lithos_lens.knowledge_landing` | S | 2 | 6 |
-| `lithos_lens.knowledge_metadata` | S | 3 | 2 |
+| `lithos_lens.knowledge_metadata` | M | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
 | `lithos_lens.knowledge_search` | XS | 1 | 1 |

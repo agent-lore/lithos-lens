@@ -1164,6 +1164,22 @@ a.blocker-chip:focus-visible {
   font-size: 0.85rem;
 }
 
+/* A url is one unbroken token: break it rather than widen the page. */
+.note-source {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.note-archive-notice {
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+  padding-left: 0.6rem;
+}
+
 .claim-list {
   grid-column: 1 / -1;
 }

@@ -250,6 +250,9 @@ classDiagram
     +contributors tuple[str, ...]
     +created_at str
     +updated_at str
+    +source_url str
+    +source_text str
+    +archive_notice str
   }
   class ProducedByTask {
     +task_id str
