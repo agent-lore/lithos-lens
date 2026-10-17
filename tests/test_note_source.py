@@ -169,6 +169,15 @@ def test_no_archive_notice_unless_the_note_is_archive_terminal(
         "## Archive\n\npath: archive/2026/09/x.html\n",
         "## Archive\npath:archive/x.pdf\n",
         "## Archive\r\n\r\npath: archive/x.html\r\n",
+        # Influx strips the section body before matching ``path:``, so an
+        # indented line is a stored path too (influx ``canonical_note.py``
+        # ``_PATH_LINE_RE`` allows the same leading spaces and tabs).
+        "## Archive\n  path: archive/x.html\n",
+        "## Archive\n\n\tpath: archive/x.html\n",
+        "## Archive\r\n \t\r\n  path: archive/x.html\r\n",
+        # Influx rejects a second line as malformed, but the section is not
+        # empty, so there is no missing body to explain.
+        "## Archive\npath: archive/x.html\nstray\n",
     ],
 )
 def test_no_archive_notice_when_the_archive_section_holds_a_path(
@@ -192,6 +201,8 @@ def test_no_archive_notice_when_the_archive_section_holds_a_path(
     [
         "# T\n\n## Archive\n\n## Summary\npath: in the summary is not the archive\n",
         "# T\n\n## Summary\nNo archive section at all.\n",
+        # A bare ``path:`` names no file: Influx rejects it as malformed.
+        "# T\n\n## Archive\n  path:\n\n## Summary\nGist.\n",
     ],
 )
 def test_archive_notice_when_the_archive_section_is_empty_or_absent(

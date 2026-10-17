@@ -60,9 +60,10 @@ _ARCHIVE_TERMINAL_REASONS: tuple[tuple[str, str], ...] = (
 _ARCHIVE_TERMINAL_FALLBACK = "Influx gave up after repeated failed fetches"
 
 #: An Influx note's stored archive: a ``## Archive`` section whose body is one
-#: ``path:`` line (influx ``notes.py::parse_archive_path``).
+#: ``path:`` line (influx ``notes.py::parse_archive_path``). Influx strips the
+#: body before matching, so the line may be indented.
 _ARCHIVE_PATH_RE = re.compile(
-    r"^## Archive[ \t]*\r?\n(?:[ \t]*\r?\n)*path:[ \t]*\S", re.MULTILINE
+    r"^## Archive[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*path:[ \t]*\S", re.MULTILINE
 )
 
 
