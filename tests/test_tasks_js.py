@@ -27,8 +27,10 @@ when it is absent rather than failing a pure-Python environment.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -2351,7 +2353,7 @@ function ranks() {
     states.push(snapshot());
   }
   await new Promise((resolve) => setImmediate(resolve));
-  console.log(JSON.stringify({
+  const result = JSON.stringify({
     states,
     final: snapshot(),
     pushed,
@@ -2375,9 +2377,12 @@ function ranks() {
       .filter((node) => node.animated())
       .map(named)
       .sort(),
-  }));
+  });
   // The pulse re-arms itself forever, so this process will not end on its own.
-  process.exit(0);
+  // It exits once the result has been written: a pipe takes what fits in its
+  // buffer at once and the rest waits for the event loop, which an exit
+  // straight after the write would never run.
+  process.stdout.write(result + "\\n", () => process.exit(0));
 })();
 """
 
@@ -3001,6 +3006,55 @@ def _graph_run(
 
 def _rank(result: dict, task_id: str) -> float:
     return result["ranks"][task_id]
+
+
+# ── The harness itself ──────────────────────────────────────────────────
+
+
+def test_the_graph_harness_delivers_its_whole_result_through_a_one_page_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The harness must exit only once its result has left the process.
+
+    Node writes to a pipe asynchronously: what fits in the pipe's buffer goes
+    at once and the rest waits for the event loop, so an exit straight after the
+    write drops it. A pipe holds 64 KiB until its user passes the kernel's
+    ``pipe-user-pages-soft``, after which new pipes get two pages, and every
+    graph test then failed on a result cut off at 8 KiB. One page reproduces
+    that on any machine.
+    """
+    fcntl = pytest.importorskip("fcntl")
+    if not hasattr(fcntl, "F_SETPIPE_SZ"):
+        pytest.skip("pipe capacity cannot be set on this platform")
+    capacity: list[int] = []
+
+    def run_through_one_page_pipe(
+        argv: list[str], *, timeout: float, **_: object
+    ) -> subprocess.CompletedProcess[str]:
+        read_end, write_end = os.pipe()
+        fcntl.fcntl(write_end, fcntl.F_SETPIPE_SZ, os.sysconf("SC_PAGE_SIZE"))
+        capacity.append(fcntl.fcntl(write_end, fcntl.F_GETPIPE_SZ))
+        with subprocess.Popen(argv, stdout=write_end) as proc:
+            os.close(write_end)
+            # A harness that never exits would otherwise hang the read forever.
+            killer = threading.Timer(timeout, proc.kill)
+            killer.start()
+            try:
+                with os.fdopen(read_end, encoding="utf-8") as out:
+                    stdout = out.read()
+            finally:
+                killer.cancel()
+        if proc.returncode:
+            raise subprocess.CalledProcessError(proc.returncode, argv, stdout)
+        return subprocess.CompletedProcess(argv, proc.returncode, stdout)
+
+    monkeypatch.setattr(subprocess, "run", run_through_one_page_pipe)
+
+    result = _graph_run([])
+
+    # The result has to outgrow the pipe, or this proves nothing.
+    assert len(json.dumps(result)) > capacity[0]
+    assert result["final"]["nodes"]
 
 
 # ── What is drawn, and in what style ────────────────────────────────────
