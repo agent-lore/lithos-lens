@@ -5,10 +5,11 @@ architecture god-module ceiling, the way ``task_graph`` sits beside ``tasks``).
 A note's frontmatter drives a row of scannable chips (note_type, status,
 access_scope, namespace, confidence), a ``summaries.short`` lede rendered above
 the body, a ``supersedes`` back-reference, and an authorship line
-(REQUIREMENTS.md §6.4). The view model is built purely from
-``NoteRecord.metadata`` so the ``/note/{id}`` route stays a thin orchestrator;
-every field degrades to empty when its frontmatter key is absent, so the
-template renders only the chips a note actually carries.
+(REQUIREMENTS.md §6.4). It also carries the note's ``source_url`` and, for a
+note Influx never archived, why its article body is missing. The view model is
+built purely from the ``NoteRecord`` so the ``/note/{id}`` route stays a thin
+orchestrator; every field degrades to empty when its frontmatter key (or tag)
+is absent, so the template renders only what a note actually carries.
 
 The /knowledge landing's result cards and recent-list rows carry the same
 chips, compact. Neither ``lithos_search`` rows nor ``lithos_list`` items carry
@@ -25,6 +26,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from lithos_lens.tasks import NoteRecord
 
@@ -32,6 +34,37 @@ logger = logging.getLogger(__name__)
 
 # Anything outside this class-safe set collapses to ``-`` in a status slug.
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+#: The schemes a ``source_url`` may carry to be rendered as a link. Anything
+#: else (a ``javascript:`` url above all) is shown as text and never made
+#: clickable: frontmatter is peer-written.
+_SOURCE_LINK_SCHEMES = frozenset({"http", "https"})
+
+#: How much of a ``source_url`` that is not a link the page shows as text.
+_SOURCE_TEXT_CAP = 200
+
+#: Influx's marker for a note whose article body it never archived and will not
+#: try to again (influx ``src/influx/notes.py``, ``archive_policy.py``).
+_ARCHIVE_TERMINAL_TAG = "influx:archive-terminal"
+
+#: The tag beside the terminal marker that says why, checked in this order.
+_ARCHIVE_TERMINAL_REASONS: tuple[tuple[str, str], ...] = (
+    ("influx:archive-unsupported", "Influx does not archive articles from this site"),
+    ("influx:archive-blocked", "the site blocked Influx's fetch"),
+    ("influx:archive-skipped-by-policy", "Influx's archive policy skips this site"),
+    ("influx:archive-non-html-source", "the source is not an HTML page"),
+)
+
+#: A terminal note with none of those tags: the repair sweep marked it after its
+#: cap of failed fetches.
+_ARCHIVE_TERMINAL_FALLBACK = "Influx gave up after repeated failed fetches"
+
+#: An Influx note's stored archive: a ``## Archive`` section whose body is one
+#: ``path:`` line (influx ``notes.py::parse_archive_path``). Influx strips the
+#: body before matching, so the line may be indented.
+_ARCHIVE_PATH_RE = re.compile(
+    r"^## Archive[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*path:[ \t]*\S", re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +82,11 @@ class NoteMetadata:
     contributors: tuple[str, ...] = ()
     created_at: str = ""
     updated_at: str = ""
+    #: ``source_url`` when it is an absolute http(s) link; ``source_text`` the
+    #: bounded raw value when it is present but not one.
+    source_url: str = ""
+    source_text: str = ""
+    archive_notice: str = ""
 
     @property
     def has_chips(self) -> bool:
@@ -94,6 +132,7 @@ class NoteMetadata:
 def build_note_metadata(note: NoteRecord) -> NoteMetadata:
     """Project a note's frontmatter into the §6.4 metadata view model."""
     meta = note.metadata
+    source_url, source_text = _source(meta)
     return NoteMetadata(
         note_type=_meta_str(meta, "note_type"),
         status=_meta_str(meta, "status"),
@@ -106,6 +145,9 @@ def build_note_metadata(note: NoteRecord) -> NoteMetadata:
         contributors=_str_tuple(meta.get("contributors")),
         created_at=_meta_str(meta, "created_at"),
         updated_at=_meta_str(meta, "updated_at"),
+        source_url=source_url,
+        source_text=source_text,
+        archive_notice=_archive_notice(note),
     )
 
 
@@ -161,6 +203,44 @@ def _str_tuple(value: Any) -> tuple[str, ...]:
             item.strip() for item in value if isinstance(item, str) and item.strip()
         )
     return ()
+
+
+def _source(meta: dict[str, Any]) -> tuple[str, str]:
+    """``(link, text)`` for the note's ``source_url``.
+
+    A link only for an absolute http(s) url; any other non-empty value is shown
+    as bounded text, so the reader still sees what the note cites without Lens
+    making peer-written text clickable.
+    """
+    value = _meta_str(meta, "source_url")
+    if not value:
+        return "", ""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        parts = None
+    if parts is not None and parts.scheme in _SOURCE_LINK_SCHEMES and parts.netloc:
+        return value, ""
+    if len(value) > _SOURCE_TEXT_CAP:
+        value = value[: _SOURCE_TEXT_CAP - 1] + "…"
+    return "", value
+
+
+def _archive_notice(note: NoteRecord) -> str:
+    """Why an archive-terminal note has no article body, or empty otherwise.
+
+    Only the terminal marker earns a notice: a note still tagged
+    ``influx:archive-missing`` alone is one Influx will retry. The marker stops
+    retries without unsaying an archive, so a terminal note that does hold a
+    ``path:`` gets none either.
+    """
+    if _ARCHIVE_TERMINAL_TAG not in note.tags or _ARCHIVE_PATH_RE.search(note.content):
+        return ""
+    reason = next(
+        (text for tag, text in _ARCHIVE_TERMINAL_REASONS if tag in note.tags),
+        _ARCHIVE_TERMINAL_FALLBACK,
+    )
+    return f"The article body was not archived: {reason}. Influx will not retry."
 
 
 def _derive_namespace(meta: dict[str, Any]) -> str:

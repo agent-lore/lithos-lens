@@ -3,7 +3,8 @@
   "lithos_version": "lithos 0.6.0 @ d2c49bb (source read 2026-10-07)",
   "source": [
     "lithos:src/lithos/tools/read_search.py::lithos_read (returns id, title, path — relative to knowledge/, as lithos_list reports it — content, metadata, links, truncated, retrieval_count)",
-    "lithos:src/lithos/frontmatter_codec.py::KnowledgeMetadata.to_dict (metadata carries created_at / updated_at as isoformat strings, not created / updated)"
+    "lithos:src/lithos/frontmatter_codec.py::KnowledgeMetadata.to_dict (metadata carries created_at / updated_at as isoformat strings, not created / updated)",
+    "lithos:src/lithos/frontmatter_codec.py::KnowledgeMetadata.to_dict (the influx_archive_terminal variant: an ingested note's full frontmatter — source_url a string, the LCMA fields set, Influx's archive-outcome tags in metadata.tags; key set confirmed against a live lithos_read of an Influx note 2026-10-16)"
   ],
   "request": {
     "canonical": {
@@ -46,7 +47,54 @@
       "truncated": false,
       "retrieval_count": 7
     },
-    "variants": {},
+    "variants": {
+      "influx_archive_terminal": {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "title": "How to manage AI investments in the agentic era",
+        "path": "articles/blog/2026/07/how-to-manage-ai-investments-in-the-agentic-era.md",
+        "content": "# How to manage AI investments in the agentic era\n\n## Archive\n\n## Summary\n### Contributions\n- Framework for managing AI investments by measuring useful work per dollar\n\n## User Notes",
+        "metadata": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "title": "How to manage AI investments in the agentic era",
+          "author": "influx",
+          "created_at": "2026-09-17T06:00:30.051911+00:00",
+          "updated_at": "2026-09-17T06:03:40.014329+00:00",
+          "tags": [
+            "profile:ai-coding",
+            "source:blog",
+            "feed-slug:openai-news",
+            "ingested-by:influx",
+            "schema:1",
+            "influx:archive-unsupported",
+            "influx:archive-terminal"
+          ],
+          "aliases": [],
+          "confidence": 1,
+          "contributors": [
+            "lithos-enrich"
+          ],
+          "source": null,
+          "supersedes": null,
+          "version": 2,
+          "source_url": "https://openai.com/index/managing-ai-investments-in-agentic-era",
+          "schema_version": 1,
+          "namespace": "influx",
+          "access_scope": "shared",
+          "note_type": "summary",
+          "status": "active",
+          "entities": [
+            "AI-assisted",
+            "AI-driven"
+          ],
+          "entities_extractor": 4,
+          "derived_from_ids": [],
+          "extra": {}
+        },
+        "links": [],
+        "truncated": false,
+        "retrieval_count": 4
+      }
+    },
     "errors": [
       {
         "status": "error",
