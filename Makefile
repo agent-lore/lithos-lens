@@ -36,7 +36,7 @@ metrics-history:
 metrics-diff:
 	@set -e; tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
 	git show $(or $(BASE),origin/main):docs/generated/metrics.json > $$tmp 2>/dev/null || echo '{}' > $$tmp; \
-	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json
+	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json --check
 
 # Refresh tests/contracts/_tools_snapshot.json from a live Lithos server's
 # tools/list surface (URL from $LITHOS_URL, default http://localhost:8765).
