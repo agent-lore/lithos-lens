@@ -3,21 +3,291 @@
 
 # Architecture metrics
 
+## Measurement scope
+
+```json
+{
+  "analyzer_version": "1.6.0",
+  "capabilities": {
+    "complexity": "measured",
+    "domain": "measured",
+    "mcp": "unsupported",
+    "seams": "measured",
+    "structure": "measured"
+  },
+  "config_hash": "7d4923ab474ab581e41828e32e5c42a1ff210e128563e9d3db845d7ceef96e60",
+  "definitions": {
+    "complexity": 1,
+    "structure": 1,
+    "test_volume": 2
+  },
+  "language": "python",
+  "scope": {
+    "domain": {
+      "exclude_modules": [
+        "lithos_lens.attention",
+        "lithos_lens.config",
+        "lithos_lens.config_env",
+        "lithos_lens.config_schema",
+        "lithos_lens.errors",
+        "lithos_lens.fake_lithos",
+        "lithos_lens.fake_writes",
+        "lithos_lens.fake_store",
+        "lithos_lens.fake_dataset",
+        "lithos_lens.fake_graph_dataset",
+        "lithos_lens.fake_knowledge_dataset",
+        "lithos_lens.write_funnel",
+        "lithos_lens.cancel_routes",
+        "lithos_lens.create_routes",
+        "lithos_lens.knowledge_routes",
+        "lithos_lens.knowledge_graph_routes"
+      ],
+      "include_modules": [
+        "lithos_lens.tasks",
+        "lithos_lens.task_writes",
+        "lithos_lens.agent_picker",
+        "lithos_lens.filter_options",
+        "lithos_lens.dashboard",
+        "lithos_lens.gates",
+        "lithos_lens.gate_scope",
+        "lithos_lens.pr_reconciliation",
+        "lithos_lens.task_detail",
+        "lithos_lens.task_links",
+        "lithos_lens.blocker_chain",
+        "lithos_lens.task_graph",
+        "lithos_lens.graph_cache",
+        "lithos_lens.graph_fanout",
+        "lithos_lens.graph_scope",
+        "lithos_lens.graph_layout",
+        "lithos_lens.graph_cycles",
+        "lithos_lens.graph_view",
+        "lithos_lens.graph_snapshot",
+        "lithos_lens.graph_impact",
+        "lithos_lens.graph_page",
+        "lithos_lens.graph_mini",
+        "lithos_lens.cancel_consequences",
+        "lithos_lens.relation_sentences",
+        "lithos_lens.knowledge",
+        "lithos_lens.knowledge_resolver",
+        "lithos_lens.knowledge_metadata",
+        "lithos_lens.knowledge_produced_by",
+        "lithos_lens.knowledge_search",
+        "lithos_lens.knowledge_edge_evidence",
+        "lithos_lens.knowledge_landing",
+        "lithos_lens.knowledge_tags",
+        "lithos_lens.knowledge_edges",
+        "lithos_lens.knowledge_edge_types",
+        "lithos_lens.knowledge_facts",
+        "lithos_lens.knowledge_graph",
+        "lithos_lens.knowledge_graph_typed",
+        "lithos_lens.knowledge_graph_expansion",
+        "lithos_lens.knowledge_graph_view",
+        "lithos_lens.knowledge_graph_panels",
+        "lithos_lens.knowledge_graph_picker",
+        "lithos_lens.events",
+        "lithos_lens.state",
+        "lithos_lens.lithos_client",
+        "lithos_lens.operator",
+        "lithos_lens.write_errors",
+        "lithos_lens.receipts",
+        "lithos_lens.gate_override",
+        "lithos_lens.create_form",
+        "lithos_lens.create_coordinator"
+      ]
+    },
+    "excluded": [
+      "third-party code",
+      "files outside the source root",
+      "templates and browser code",
+      "kit tooling"
+    ],
+    "source_root": "src/lithos_lens",
+    "source_suffixes": [
+      ".py"
+    ],
+    "test_exclusions": [
+      "tests/guardrail",
+      "tests/test_metrics_diff.py",
+      "tests/test_metrics_history.py",
+      "tests/test_quality.py"
+    ]
+  },
+  "source_hash": "31f7251b3e970b4209576bb3b76335c53493c252e30e2124b59a32666df6de1f",
+  "tools": {
+    "grimp": "3.14",
+    "networkx": "3.6.1"
+  }
+}
+```
+
+Test/source ratio is a volume statistic, not test effectiveness; kit tooling is excluded.
+
 ## Budgets
 
-Hard limits from `docs/architecture.toml [budgets]`, enforced in CI by
-`tests/guardrail/test_metrics_budgets.py`. Headroom = budget - actual;
-lower a budget after improving the code to lock in the gain.
+Only invariant budgets block generation; review/context thresholds are reported.
+Accepted budgets from `docs/architecture.toml [budgets]`, enforced in CI by
+`tests/guardrail/test_metrics_budgets.py`. Headroom = budget - actual.
 
-| Metric | Actual | Budget | Headroom |
-|---|---:|---:|---:|
-| `component_cycles` | 0 | 0 | 0 |
-| `cross_component_edges` | 41 | 41 | 0 |
-| `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 880 | 880 | 0 |
-| `module_cycles` | 0 | 0 | 0 |
-| `modules_over_800_lines` | 5 | 5 | 0 |
-| `tests_private_imports` | 0 | 0 | 0 |
+Architectural invariants (dependency restrictions and prohibited cycles)
+require an explicit architecture decision to change. Size and complexity
+thresholds prompt design review: do not split cohesive code solely to
+satisfy a number. If there is no clean seam and keeping the code together
+is clearer, adjust the relevant threshold and explain the design tradeoff
+in the same PR. Lower thresholds when that protects useful improvements.
+
+| Metric | Actual | Budget | Headroom | Policy |
+|---|---:|---:|---:|---|
+| `component_cycles` | 0 | 0 | 0 | invariant |
+| `cross_component_edges` | 41 | 41 | 0 | review |
+| `cross_module_private_refs` | 0 | 0 | 0 | invariant |
+| `max_module_lines` | 880 | 880 | 0 | review |
+| `module_cycles` | 0 | 0 | 0 | invariant |
+| `modules_over_800_lines` | 5 | 5 | 0 | review |
+| `tests_private_imports` | 0 | 0 | 0 | invariant |
+
+### Quality review
+
+
+| Status | Metric | Target | Before | After | Policy | Exception |
+|---|---|---|---:|---:|---|---|
+| unchanged | function_complexity | lithos_lens.agent_picker.agent_options | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos_lens.board_strips.build_project_strip | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.cancel_consequences.walk_downstream | 18 | 18 | review | — |
+| unchanged | function_complexity | lithos_lens.config_env.apply_env_overrides | 43 | 43 | review | — |
+| unchanged | function_complexity | lithos_lens.create_form.validate | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.edge_routes.register_edge_routes.relation_confirm | 16 | 16 | review | — |
+| unchanged | function_complexity | lithos_lens.events._iter_sse_lines | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.events._stream_lithos_events | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.events.normalize_lithos_event | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_lithos.FakeLithosClient.list_notes | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_lithos.FakeLithosClient.list_tasks | 20 | 20 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_lithos.FakeLithosClient.search_notes | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_store.FakeStoreView.blockers | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_writes.FakeWriteStore.create | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_writes.FakeWriteStore.edge_upsert | 21 | 21 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_writes.FakeWriteStore.reopen | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.fake_writes.FakeWriteStore.resolve_id | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.frontier.load_dashboard | 41 | 41 | review | — |
+| unchanged | function_complexity | lithos_lens.frontier.load_dashboard._partition_state | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.frontier_join.classify_open_tasks | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.gate_scope.load_gate_waits | 22 | 22 | review | — |
+| unchanged | function_complexity | lithos_lens.gates.attach_gate_waiters | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_cache.GraphCache.edges_for | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_cycles._signal | 24 | 24 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_cycles.coverage_projects | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_impact._downstream | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_impact.load_impact | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_impact.reconciled_impact | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_layout._strongly_connected | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_layout.build_topology | 18 | 18 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_layout.hierarchy_rows | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_mini._parent_epic | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_mini.load_mini_graph | 22 | 22 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_page._callout | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_page._node_views | 16 | 16 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_page.build_graph_page | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_page.graph_url | 16 | 16 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_scope._classify_edges | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_scope.assemble_scope | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.graph_snapshot.lower_bound_nodes | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_edges.EdgeTable._patch | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_facts.NoteFactsCache.lookup | 18 | 18 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph.build_view | 18 | 18 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_expansion._eligibility | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_expansion.walk_expansions | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_panels.node_panel | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_routes._graph_url | 16 | 16 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_routes._record | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_routes._url_value | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_routes.register_knowledge_graph_routes.knowledge_graph_panel | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_typed.expanded_typed_graph | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_graph_view.graph_payload | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_resolver._gather_candidates | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_routes.register_knowledge_routes.knowledge | 18 | 18 | review | — |
+| unchanged | function_complexity | lithos_lens.knowledge_routes.register_knowledge_routes.note | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos_lens.lithos_client.LithosClient.recent_notes | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.normalizers.normalize_task | 23 | 23 | review | — |
+| unchanged | function_complexity | lithos_lens.normalizers.normalize_task_status | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.pr_reconciliation.reconciliation_of | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.request_filters._parse_preserved_filters | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos_lens.task_detail.resolve_finding_notes | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos_lens.task_filtering.board_visible_ids | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos_lens.task_filtering.matches_filters | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos_lens.tasks.parse_filters | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos_lens.write_funnel.WriteFunnel._attempt | 17 | 17 | review | — |
+| unchanged | function_length | lithos_lens.board_strips.build_project_strip | 90 | 90 | review | — |
+| unchanged | function_length | lithos_lens.cancel_consequences.walk_downstream | 81 | 81 | review | — |
+| unchanged | function_length | lithos_lens.cancel_routes.register_cancel_routes | 206 | 206 | review | — |
+| unchanged | function_length | lithos_lens.config._parse_knowledge | 136 | 136 | review | — |
+| unchanged | function_length | lithos_lens.config_env.apply_env_overrides | 337 | 337 | review | — |
+| unchanged | function_length | lithos_lens.create_routes.register_create_routes | 127 | 127 | review | — |
+| unchanged | function_length | lithos_lens.edge_routes.register_edge_routes | 322 | 322 | review | — |
+| unchanged | function_length | lithos_lens.edge_routes.register_edge_routes.add_edge | 86 | 86 | review | — |
+| unchanged | function_length | lithos_lens.edge_routes.register_edge_routes.relation_confirm | 125 | 125 | review | — |
+| unchanged | function_length | lithos_lens.fake_dataset.demo_dataset | 599 | 599 | review | — |
+| unchanged | function_length | lithos_lens.fake_graph_dataset.graph_fixtures | 297 | 297 | review | — |
+| unchanged | function_length | lithos_lens.fake_knowledge_dataset.knowledge_edge_rows | 145 | 145 | review | — |
+| unchanged | function_length | lithos_lens.fake_knowledge_dataset.related_fixtures | 91 | 91 | review | — |
+| unchanged | function_length | lithos_lens.fake_writes.FakeWriteStore.create | 123 | 123 | review | — |
+| unchanged | function_length | lithos_lens.fake_writes.FakeWriteStore.edge_upsert | 111 | 111 | review | — |
+| unchanged | function_length | lithos_lens.frontier.load_dashboard | 580 | 580 | review | — |
+| unchanged | function_length | lithos_lens.gates.attach_gate_waiters | 81 | 81 | review | — |
+| unchanged | function_length | lithos_lens.graph_cycles._signal | 91 | 91 | review | — |
+| unchanged | function_length | lithos_lens.graph_impact.downstream_impact | 77 | 77 | review | — |
+| unchanged | function_length | lithos_lens.graph_impact.load_impact | 91 | 91 | review | — |
+| unchanged | function_length | lithos_lens.graph_impact.reconciled_impact | 80 | 80 | review | — |
+| unchanged | function_length | lithos_lens.graph_mini._parent_epic | 97 | 97 | review | — |
+| unchanged | function_length | lithos_lens.graph_mini.load_mini_graph | 218 | 218 | review | — |
+| unchanged | function_length | lithos_lens.graph_page._banners | 79 | 79 | review | — |
+| unchanged | function_length | lithos_lens.graph_routes.register_graph_routes | 233 | 233 | review | — |
+| unchanged | function_length | lithos_lens.graph_routes.register_graph_routes.task_minigraph | 83 | 83 | review | — |
+| unchanged | function_length | lithos_lens.graph_routes.register_graph_routes.tasks_graph | 129 | 129 | review | — |
+| unchanged | function_length | lithos_lens.graph_scope.assemble_scope | 107 | 107 | review | — |
+| unchanged | function_length | lithos_lens.graph_view.payload_json | 108 | 108 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_graph.assemble_focus_graph | 82 | 82 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_graph.build_view | 110 | 110 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_graph_routes.register_knowledge_graph_routes | 181 | 181 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_graph_routes.register_knowledge_graph_routes.knowledge_graph | 76 | 76 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_graph_routes.register_knowledge_graph_routes.knowledge_graph_panel | 79 | 79 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_graph_typed.expanded_typed_graph | 91 | 91 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_routes.register_knowledge_routes | 322 | 322 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_routes.register_knowledge_routes.knowledge | 126 | 126 | review | — |
+| unchanged | function_length | lithos_lens.knowledge_routes.register_knowledge_routes.note | 85 | 85 | review | — |
+| unchanged | function_length | lithos_lens.lithos_client.LithosClient.recent_notes | 79 | 79 | review | — |
+| unchanged | function_length | lithos_lens.pr_reconciliation.reconciliation_of | 78 | 78 | review | — |
+| unchanged | function_length | lithos_lens.task_detail.load_task_detail | 122 | 122 | review | — |
+| unchanged | function_length | lithos_lens.task_detail.resolve_finding_notes | 88 | 88 | review | — |
+| unchanged | function_length | lithos_lens.task_filtering.matches_filters | 92 | 92 | review | — |
+| unchanged | function_length | lithos_lens.telemetry.setup_telemetry | 91 | 91 | review | — |
+| unchanged | function_length | lithos_lens.web._render_tasks | 125 | 125 | review | — |
+| unchanged | function_length | lithos_lens.web.create_app | 368 | 368 | review | — |
+| unchanged | function_length | lithos_lens.write_funnel.WriteFunnel._attempt | 108 | 108 | review | — |
+| unchanged | function_length | lithos_lens.write_funnel.WriteFunnel._run_create | 101 | 101 | review | — |
+| unchanged | function_length | lithos_lens.write_routes.register_write_routes | 295 | 295 | review | — |
+| unchanged | module_lines | lithos_lens.frontier | 863 | 863 | review | — |
+| unchanged | module_lines | lithos_lens.graph_layout | 830 | 830 | review | — |
+| unchanged | module_lines | lithos_lens.tasks | 854 | 854 | review | — |
+| unchanged | module_lines | lithos_lens.write_errors | 825 | 825 | review | — |
+| unchanged | module_lines | lithos_lens.write_funnel | 880 | 880 | review | — |
+- branch_coverage: missing; value —; scope not recorded; evidence not recorded
+- mutation: missing; value —; scope not recorded; evidence not recorded
+
+
+## Quality evidence
+
+Optional measurements are source-bound; missing or stale evidence is not a score.
+
+```json
+{
+  "branch_coverage": {
+    "status": "missing"
+  },
+  "mutation": {
+    "status": "missing"
+  },
+  "outcomes": []
+}
+```
 
 ## Import graph
 
@@ -62,21 +332,23 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 ## Complexity
 
 - Functions: **1222**, cyclomatic > 10: **65**
+- Cyclomatic distribution: median **2**, p90 **8**, max **43**
+- Function length (lines): median 12, p90 45, max 599 (`lithos_lens.fake_dataset.demo_dataset`); over 75: **49**
 
 Top 10 most complex functions:
 
-| Complexity | Function |
-|---:|---|
-| 43 | `lithos_lens.config_env.apply_env_overrides` |
-| 41 | `lithos_lens.frontier.load_dashboard` |
-| 24 | `lithos_lens.graph_cycles._signal` |
-| 23 | `lithos_lens.normalizers.normalize_task` |
-| 22 | `lithos_lens.gate_scope.load_gate_waits` |
-| 22 | `lithos_lens.graph_mini.load_mini_graph` |
-| 21 | `lithos_lens.fake_writes.FakeWriteStore.edge_upsert` |
-| 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
-| 19 | `lithos_lens.fake_writes.FakeWriteStore.create` |
-| 19 | `lithos_lens.task_filtering.matches_filters` |
+| Complexity | Length | Function |
+|---:|---:|---|
+| 43 | 337 | `lithos_lens.config_env.apply_env_overrides` |
+| 41 | 580 | `lithos_lens.frontier.load_dashboard` |
+| 24 | 91 | `lithos_lens.graph_cycles._signal` |
+| 23 | 36 | `lithos_lens.normalizers.normalize_task` |
+| 22 | 75 | `lithos_lens.gate_scope.load_gate_waits` |
+| 22 | 218 | `lithos_lens.graph_mini.load_mini_graph` |
+| 21 | 111 | `lithos_lens.fake_writes.FakeWriteStore.edge_upsert` |
+| 20 | 37 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
+| 19 | 123 | `lithos_lens.fake_writes.FakeWriteStore.create` |
+| 19 | 92 | `lithos_lens.task_filtering.matches_filters` |
 
 ## Seams
 
@@ -89,4 +361,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **151** (169 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.12** (78927 test lines / 37316 source lines)
+- Test-to-source line ratio: **2.04** (76161 test lines / 37316 source lines)
