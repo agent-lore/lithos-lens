@@ -92,6 +92,7 @@ source_modules = [
     "lithos_lens.cancel_consequences",
     "lithos_lens.relation_sentences",
     "lithos_lens.frontier",
+    "lithos_lens.frontier_reads",
     "lithos_lens.gates",
     "lithos_lens.gate_scope",
     "lithos_lens.pr_reconciliation",

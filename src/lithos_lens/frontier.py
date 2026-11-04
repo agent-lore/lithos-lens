@@ -52,17 +52,14 @@ from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.board_strips import load_board_strips
 from lithos_lens.dashboard import DashboardData, TaskSummary
 from lithos_lens.filter_options import build_filter_options
-from lithos_lens.frontier_fallback import (
-    RETRY_FAILED_ERROR,
-    flat_open_sections,
-    resolve_frontier,
-)
+from lithos_lens.frontier_fallback import flat_open_sections
 from lithos_lens.frontier_join import (
     WORKABLE_TASK_TYPE,
     approximate_counters,
     classify_open_tasks,
     reclassify_conservative,
 )
+from lithos_lens.frontier_reads import ReadGeneration, read_generation
 from lithos_lens.gate_scope import load_gate_waits
 from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
@@ -209,8 +206,13 @@ async def load_dashboard(
             with_claims=bool(filters.agent),
         )
 
-    ready_read = lithos.task_ready(limit=frontier_limit, with_claims=False)
-    blocked_read = lithos.task_blocked(limit=frontier_limit)
+    # The master open set is the whole open list (PRD data contract): NO
+    # agent/tag/since filter is pushed. Open tasks are the live frontier, not a
+    # time window (``since`` scopes only the resolved completed/cancelled
+    # sections), and filtering client-side keeps one fetch serving every
+    # projection while leaving the snapshot whole — so a blocker chip can
+    # resolve a predecessor's title even when that predecessor is itself
+    # filtered out of, or older than, the visible sections.
     (
         open_result,
         ready_result,
@@ -220,16 +222,9 @@ async def load_dashboard(
         completed_result,
         cancelled_result,
     ) = await asyncio.gather(
-        # The master open set is the whole open list (PRD data contract):
-        # NO agent/tag/since filter is pushed. Open tasks are the live frontier,
-        # not a time window (``since`` scopes only the resolved completed/
-        # cancelled sections), and filtering client-side keeps one fetch serving
-        # every projection while leaving the snapshot whole — so a blocker chip
-        # can resolve a predecessor's title even when that predecessor is itself
-        # filtered out of, or older than, the visible sections.
         lithos.list_tasks(status="open", with_claims=True),
-        ready_read,
-        blocked_read,
+        lithos.task_ready(limit=frontier_limit, with_claims=False),
+        lithos.task_blocked(limit=frontier_limit),
         lithos.stats(),
         lithos.list_agents(),
         load_closed("completed"),
@@ -238,57 +233,22 @@ async def load_dashboard(
     )
     # gather() overloads stop narrowing positionally beyond five results, so
     # the per-slot unions are reasserted here.
-    closed_results = (
+    agents_read = cast("list[AgentRecord] | BaseException", agents_result)
+    # The five related reads travel as ONE generation from here: the join
+    # reads its views, and the skew retry below replaces it whole or not at
+    # all (``ReadGeneration.adopt``) — never one slot beside another issue's.
+    generation = ReadGeneration(
+        cast("list[TaskRecord] | BaseException", open_result),
+        cast("list[TaskRecord] | BaseException", ready_result),
+        cast("list[BlockedTaskRecord] | BaseException", blocked_result),
         cast("list[TaskRecord] | BaseException", completed_result),
         cast("list[TaskRecord] | BaseException", cancelled_result),
     )
-    agents_read = cast("list[AgentRecord] | BaseException", agents_result)
+    generation.record_failures(errors)
 
-    # The full open snapshot (unfiltered by agent/tag) resolves blocker-chip
-    # predecessor titles even when a predecessor is filtered out of the visible
-    # sections; ``visible_open`` is the agent/tag-filtered subset that the
-    # sections render.
-    open_snapshot = _sorted_or_error(
-        "open", cast("list[TaskRecord] | BaseException", open_result), errors
-    )
-
-    frontier_ok, ready_list, blocked_records = resolve_frontier(
-        ready_result,
-        blocked_result,
-        errors=errors,
-    )
-    # Tracked apart from ``frontier_ok`` (which is ready AND blocked): the gate
-    # waiter counts depend on the blocked read alone, so a ready-only outage
-    # must not degrade them — and "0 waiters" built on a blocked read that
-    # never answered would be a fabricated fact rather than a degraded one.
-    blocked_ok = not isinstance(blocked_result, BaseException)
-
-    # Raw terminal rows (pre-filter), indexed by id. Two uses, one pass:
-    #
-    # - MEMBERSHIP — a task appearing in BOTH the open snapshot and a terminal
-    #   result is freshness skew worth a retry, whether or not the terminal row
-    #   survives the section filters.
-    # - blocker NAMES. A predecessor that was cancelled or completed is by
-    #   definition absent from the open snapshot, and a cancelled one is
-    #   exactly what the highest-severity rule fires on: the unsatisfiable chip
-    #   and its reason sentence would print a raw task id on the loudest row on
-    #   the board while the same page renders that task's title in Cancelled.
-    #   These reads are already in hand, so naming it costs nothing. The
-    #   residual is honest and bounded: a predecessor resolved outside the
-    #   ``resolved_since`` window was never read, so it still falls back to its
-    #   id — Lens names what it read.
-    terminal_index: dict[str, TaskRecord] = {}
-
-    def _read_terminal() -> None:
-        """(Re)build the index: the skew retry adopts a new generation."""
-        terminal_index.clear()
-        for closed_result in closed_results:
-            if not isinstance(closed_result, BaseException):
-                terminal_index.update({task.id: task for task in closed_result})
-
-    _read_terminal()
-
-    def _blocker_names(open_index: Mapping[str, TaskRecord]) -> dict[str, TaskRecord]:
+    def _blocker_names(
+        generation: ReadGeneration, open_index: Mapping[str, TaskRecord]
+    ) -> dict[str, TaskRecord]:
         """The index used to NAME blockers — never to decide openness.
 
         Deliberately a second view rather than a wider ``index``: the open
@@ -299,14 +259,14 @@ async def load_dashboard(
         rows winning a collision because they are the generation the sections
         render.
         """
-        return {**terminal_index, **open_index}
+        return {**generation.terminal_index, **open_index}
 
     def _partition_state(
-        snapshot: list[TaskRecord],
-        ready_rows: list[TaskRecord],
-        blocked_rows: list[BlockedTaskRecord],
-        scope_ids: frozenset[str] | None,
+        generation: ReadGeneration, scope_ids: frozenset[str] | None
     ) -> _FrontierState:
+        snapshot = generation.open_snapshot
+        ready_rows = generation.ready_rows
+        blocked_rows = generation.blocked_rows
         index = {task.id: task for task in snapshot}
         visible = [
             task
@@ -333,7 +293,7 @@ async def load_dashboard(
             visible,
             ready_ids=ready_ids,
             blocked=blocked_rows,
-            index=_blocker_names(index),
+            index=_blocker_names(generation, index),
         )
         # Only an overlap that changes what RENDERS is a contradiction worth
         # the warning: a filtered-out task is in no section, and a
@@ -353,7 +313,7 @@ async def load_dashboard(
         # An id in both the open snapshot and a terminal result is freshness
         # skew: it drives the retry (the later snapshot then arbitrates via
         # the closed dedup) but not the moved-to-Blocked surface.
-        terminal_overlap = terminal_index.keys() & index.keys()
+        terminal_overlap = generation.terminal_index.keys() & index.keys()
         # Same class, other direction: a frontier answered with a task the
         # open read never saw — it closed in between (epics and gates are
         # excluded from both frontiers upstream, so nothing else gets in). It
@@ -381,10 +341,11 @@ async def load_dashboard(
     # (see the module docstring): counts can be a generation newer, which is
     # why only a non-empty subtree is allowed to scope. Without a frontier
     # every open row renders flat, epics included, so no type is held back.
+    frontier_ok = generation.frontier_ok
     strips = await load_board_strips(
         lithos,
-        open_snapshot,
-        closed_results,
+        generation.open_snapshot,
+        generation.closed_results,
         filters=filters,
         open_row_types=PLACED_OPEN_TYPES if frontier_ok else None,
     )
@@ -396,58 +357,37 @@ async def load_dashboard(
     # read would present itself as truncation.
     frontier_only: set[str] = set()
     if frontier_ok:
-        state = _partition_state(open_snapshot, ready_list, blocked_records, scope_ids)
+        state = _partition_state(generation, scope_ids)
 
-        if frontier_ok and state.retry_worthy:
+        if state.retry_worthy:
             # Read-skew between independent reads (a would-be-Ready task also
             # in the blocked response, a below-limit frontier gap, or a row one
             # read returned and another never saw). Retry ALL FIVE reads of the
             # generation, the terminal windows included: keeping any first-
             # generation result beside the retried ones is precisely the mixed
-            # generation the policy forbids. Adopt it only when every read
-            # succeeds; a persisting disagreement is handled conservatively
-            # below rather than trusted.
-            retried = await asyncio.gather(
-                lithos.list_tasks(status="open", with_claims=True),
-                lithos.task_ready(limit=frontier_limit, with_claims=False),
-                lithos.task_blocked(limit=frontier_limit),
-                load_closed("completed"),
-                load_closed("cancelled"),
-                return_exceptions=True,
+            # generation the policy forbids. ``adopt`` takes the retry whole
+            # or keeps this generation and says so; a persisting disagreement
+            # is handled conservatively below rather than trusted.
+            retried = await read_generation(
+                lithos,
+                frontier_limit=frontier_limit,
+                completed=load_closed("completed"),
+                cancelled=load_closed("cancelled"),
             )
-            if any(isinstance(result, BaseException) for result in retried):
-                # Keep the first generation (a mixed one would be worse), but
-                # SAY SO: without this the stripe can call a board healthy
-                # whose skew was never resolved.
-                errors.append(RETRY_FAILED_ERROR)
-            else:
-                retry_open, retry_ready, retry_blocked, *retry_closed = retried
-                open_snapshot = sorted(
-                    cast(list[TaskRecord], retry_open),
-                    key=lambda task: task.created_at,
-                    reverse=True,
-                )
-                ready_list = cast(list[TaskRecord], retry_ready)
-                blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
-                blocked_ok = True
-                closed_results = (
-                    cast("list[TaskRecord] | BaseException", retry_closed[0]),
-                    cast("list[TaskRecord] | BaseException", retry_closed[1]),
-                )
-                _read_terminal()
+            adopted = generation.adopt(retried, errors=errors)
+            if adopted is not generation:
+                generation = adopted
                 # Re-read the strips, so the chips (and their scope) describe
                 # the generation the sections were built from.
                 strips = await load_board_strips(
                     lithos,
-                    open_snapshot,
-                    closed_results,
+                    generation.open_snapshot,
+                    generation.closed_results,
                     filters=filters,
                     open_row_types=PLACED_OPEN_TYPES,
                 )
                 scope_ids = strips.scope_ids
-                state = _partition_state(
-                    open_snapshot, ready_list, blocked_records, scope_ids
-                )
+                state = _partition_state(generation, scope_ids)
 
         partition = state.partition
         capped_frontiers = state.capped_frontiers
@@ -457,7 +397,7 @@ async def load_dashboard(
         reconciliation_pending = frontier_ok and state.skewed_frontier
         if reconciliation_pending:
             partition = reclassify_conservative(partition, state.effective_overlap)
-        attention_blocked: list[BlockedTaskRecord] = blocked_records
+        attention_blocked: list[BlockedTaskRecord] = generation.blocked_rows
     else:
         # Flat fallback — no usable frontier, because a read of it failed
         # (a server that never had the tools fails the same way, and is
@@ -469,7 +409,7 @@ async def load_dashboard(
         # read did not answer.
         visible_open = [
             task
-            for task in open_snapshot
+            for task in generation.open_snapshot
             if matches_filters(
                 task, filters=filters, status="open", scope_ids=scope_ids
             )
@@ -484,7 +424,7 @@ async def load_dashboard(
             [task for task in visible_open if task.task_type != GATE_TASK_TYPE]
         )
         capped_frontiers = ()
-        open_index = {task.id: task for task in open_snapshot}
+        open_index = {task.id: task for task in generation.open_snapshot}
         reconciliation_pending = False
         # The severity model still runs, and on the fallback it is the GATE
         # rules that survive: rule 3 (a human gate waiting too long) and rule
@@ -505,6 +445,11 @@ async def load_dashboard(
     # An open gate is in scope when it passes the filters itself OR a task in
     # scope waits on it (``gate_scope``) — joined here, once, so the Gates
     # section, the gate promotion, the tile and the project strip read one set.
+    # The generation is settled: every read below this line is a view of it.
+    open_snapshot = generation.open_snapshot
+    blocked_records = generation.blocked_rows
+    blocked_ok = generation.blocked_ok
+    closed_results = generation.closed_results
     show_open = "open" in filters.statuses
     blocked_truncated = len(blocked_records) >= frontier_limit
     gate_waits = await load_gate_waits(
@@ -532,7 +477,7 @@ async def load_dashboard(
         blocked=attention_blocked,
         policy=policy,
         now=evaluated_at,
-        index=_blocker_names(open_index),
+        index=_blocker_names(generation, open_index),
     )
 
     if strips.epics.failed:
@@ -709,7 +654,7 @@ async def load_dashboard(
         nothing_to_show=nothing_to_show,
         # Frontier-only ids the adopted generation's resolved windows do NOT
         # explain: in no section, so never examined (see the field).
-        frontier_unplaced=bool(frontier_only - terminal_index.keys()),
+        frontier_unplaced=bool(frontier_only - generation.terminal_index.keys()),
         gates_incomplete=gate_waits.incomplete,
         errors=tuple(errors),
         # The windows this board DISPLAYS that failed to load: the epic-scope
@@ -815,26 +760,6 @@ class _FrontierState:
         self.retry_worthy = retry_worthy
         # Frontier ids the open snapshot lacks: evidence, never a section.
         self.frontier_only = frontier_only
-
-
-def _sorted_or_error(
-    status: TaskStatusName,
-    result: list[TaskRecord] | BaseException,
-    errors: list[str],
-) -> list[TaskRecord]:
-    """Sort one status group newest-first, recording a load error if any.
-
-    No filtering — the open snapshot must stay whole so it can resolve blocker
-    chips; the caller applies ``matches_filters`` to pick the visible subset.
-    """
-    if isinstance(result, BaseException):
-        errors.append(f"Could not load {status} tasks.")
-        return []
-    return sorted(
-        cast(list[TaskRecord], result),
-        key=lambda task: task.created_at,
-        reverse=True,
-    )
 
 
 def _rows_for(

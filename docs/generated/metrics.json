@@ -43,7 +43,7 @@
       },
       "TaskGraph": {
         "functions_over_10": 27,
-        "max_complexity": 41,
+        "max_complexity": 39,
         "max_function": "lithos_lens.frontier.load_dashboard"
       },
       "Tasks": {
@@ -85,8 +85,8 @@
         "qualname": "lithos_lens.config_env.apply_env_overrides"
       },
       {
-        "complexity": 41,
-        "length": 580,
+        "complexity": 39,
+        "length": 528,
         "qualname": "lithos_lens.frontier.load_dashboard"
       },
       {
@@ -130,7 +130,7 @@
         "qualname": "lithos_lens.task_filtering.matches_filters"
       }
     ],
-    "total_functions": 1222
+    "total_functions": 1233
   },
   "components": {
     "Config": {
@@ -214,6 +214,7 @@
       "prefixes": [
         "lithos_lens.task_graph",
         "lithos_lens.frontier",
+        "lithos_lens.frontier_reads",
         "lithos_lens.frontier_fallback",
         "lithos_lens.frontier_join",
         "lithos_lens.board_strips",
@@ -291,8 +292,8 @@
     }
   },
   "domain": {
-    "associations": 169,
-    "models": 151,
+    "associations": 174,
+    "models": 152,
     "models_without_docstrings": 16,
     "relationships": [
       {
@@ -987,6 +988,36 @@
       },
       {
         "cardinality": "0..*",
+        "field": "blocked_result",
+        "source": "ReadGeneration",
+        "target": "BlockedTaskRecord"
+      },
+      {
+        "cardinality": "0..*",
+        "field": "cancelled_result",
+        "source": "ReadGeneration",
+        "target": "TaskRecord"
+      },
+      {
+        "cardinality": "0..*",
+        "field": "completed_result",
+        "source": "ReadGeneration",
+        "target": "TaskRecord"
+      },
+      {
+        "cardinality": "0..*",
+        "field": "open_result",
+        "source": "ReadGeneration",
+        "target": "TaskRecord"
+      },
+      {
+        "cardinality": "0..*",
+        "field": "ready_result",
+        "source": "ReadGeneration",
+        "target": "TaskRecord"
+      },
+      {
+        "cardinality": "0..*",
         "field": "namespaces",
         "source": "RecentLanding",
         "target": "NamespaceFacet"
@@ -1502,6 +1533,15 @@
         "agents": "tuple[AgentOption, ...]",
         "projects": "tuple[str, ...]",
         "tags": "tuple[str, ...]"
+      }
+    },
+    "lithos_lens.frontier_reads.ReadGeneration": {
+      "fields": {
+        "blocked_result": "list[BlockedTaskRecord] | BaseException",
+        "cancelled_result": "list[TaskRecord] | BaseException",
+        "completed_result": "list[TaskRecord] | BaseException",
+        "open_result": "list[TaskRecord] | BaseException",
+        "ready_result": "list[TaskRecord] | BaseException"
       }
     },
     "lithos_lens.gate_override.GateOverride": {
@@ -5430,18 +5470,9 @@
         "src/lithos_lens/frontier.py"
       ]
     },
-    "lithos_lens.frontier._sorted_or_error": {
-      "complexity": 2,
-      "length": 18,
-      "module": "lithos_lens.frontier",
-      "path": "src/lithos_lens/frontier.py",
-      "paths": [
-        "src/lithos_lens/frontier.py"
-      ]
-    },
     "lithos_lens.frontier.load_dashboard": {
-      "complexity": 41,
-      "length": 580,
+      "complexity": 39,
+      "length": 528,
       "module": "lithos_lens.frontier",
       "path": "src/lithos_lens/frontier.py",
       "paths": [
@@ -5450,7 +5481,7 @@
     },
     "lithos_lens.frontier.load_dashboard._blocker_names": {
       "complexity": 1,
-      "length": 12,
+      "length": 14,
       "module": "lithos_lens.frontier",
       "path": "src/lithos_lens/frontier.py",
       "paths": [
@@ -5460,15 +5491,6 @@
     "lithos_lens.frontier.load_dashboard._partition_state": {
       "complexity": 14,
       "length": 72,
-      "module": "lithos_lens.frontier",
-      "path": "src/lithos_lens/frontier.py",
-      "paths": [
-        "src/lithos_lens/frontier.py"
-      ]
-    },
-    "lithos_lens.frontier.load_dashboard._read_terminal": {
-      "complexity": 4,
-      "length": 6,
       "module": "lithos_lens.frontier",
       "path": "src/lithos_lens/frontier.py",
       "paths": [
@@ -5485,15 +5507,6 @@
       ]
     },
     "lithos_lens.frontier_fallback.flat_open_sections": {
-      "complexity": 3,
-      "length": 27,
-      "module": "lithos_lens.frontier_fallback",
-      "path": "src/lithos_lens/frontier_fallback.py",
-      "paths": [
-        "src/lithos_lens/frontier_fallback.py"
-      ]
-    },
-    "lithos_lens.frontier_fallback.resolve_frontier": {
       "complexity": 3,
       "length": 27,
       "module": "lithos_lens.frontier_fallback",
@@ -5536,6 +5549,132 @@
       "path": "src/lithos_lens/frontier_join.py",
       "paths": [
         "src/lithos_lens/frontier_join.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.GenerationReader.list_tasks": {
+      "complexity": 1,
+      "length": 10,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.GenerationReader.task_blocked": {
+      "complexity": 1,
+      "length": 1,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.GenerationReader.task_ready": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.adopt": {
+      "complexity": 2,
+      "length": 12,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.blocked_ok": {
+      "complexity": 1,
+      "length": 6,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.blocked_rows": {
+      "complexity": 2,
+      "length": 4,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.closed_results": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.complete": {
+      "complexity": 3,
+      "length": 13,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.frontier_ok": {
+      "complexity": 2,
+      "length": 3,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.open_snapshot": {
+      "complexity": 2,
+      "length": 9,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.ready_rows": {
+      "complexity": 2,
+      "length": 2,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.record_failures": {
+      "complexity": 4,
+      "length": 12,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.ReadGeneration.terminal_index": {
+      "complexity": 4,
+      "length": 14,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
+      ]
+    },
+    "lithos_lens.frontier_reads.read_generation": {
+      "complexity": 1,
+      "length": 22,
+      "module": "lithos_lens.frontier_reads",
+      "path": "src/lithos_lens/frontier_reads.py",
+      "paths": [
+        "src/lithos_lens/frontier_reads.py"
       ]
     },
     "lithos_lens.gate_completion.completes_directly": {
@@ -13826,7 +13965,7 @@
       }
     },
     "cross_component_edges": 41,
-    "cross_component_module_edges": 218,
+    "cross_component_module_edges": 219,
     "edges": [
       {
         "imports": [
@@ -14078,6 +14217,7 @@
           "lithos_lens.frontier -> lithos_lens.tasks",
           "lithos_lens.frontier_fallback -> lithos_lens.tasks",
           "lithos_lens.frontier_join -> lithos_lens.tasks",
+          "lithos_lens.frontier_reads -> lithos_lens.tasks",
           "lithos_lens.gate_scope -> lithos_lens.tasks",
           "lithos_lens.gates -> lithos_lens.tasks",
           "lithos_lens.graph_cycles -> lithos_lens.task_filtering",
@@ -14324,7 +14464,7 @@
       "seams": "measured",
       "structure": "measured"
     },
-    "config_hash": "7d4923ab474ab581e41828e32e5c42a1ff210e128563e9d3db845d7ceef96e60",
+    "config_hash": "910cc7609c4b547bba4e82658ff844e1f9509db88b6dcbd215d423f8212c8e25",
     "definitions": {
       "complexity": 1,
       "structure": 1,
@@ -14359,6 +14499,7 @@
           "lithos_lens.dashboard",
           "lithos_lens.gates",
           "lithos_lens.gate_scope",
+          "lithos_lens.frontier_reads",
           "lithos_lens.pr_reconciliation",
           "lithos_lens.task_detail",
           "lithos_lens.task_links",
@@ -14421,7 +14562,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "31f7251b3e970b4209576bb3b76335c53493c252e30e2124b59a32666df6de1f",
+    "source_hash": "b5b2e4d9ab96c860d8d4e2ba0f459e76513acae8af0579906e785002ae4fa70e",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -14654,19 +14795,19 @@
     },
     "lithos_lens.frontier": {
       "component": "TaskGraph",
-      "functions": 17,
-      "lines": 863,
-      "max_complexity": 41,
+      "functions": 15,
+      "lines": 788,
+      "max_complexity": 39,
       "path": "src/lithos_lens/frontier.py",
-      "sloc": 594
+      "sloc": 548
     },
     "lithos_lens.frontier_fallback": {
       "component": "TaskGraph",
-      "functions": 2,
-      "lines": 86,
+      "functions": 1,
+      "lines": 47,
       "max_complexity": 3,
       "path": "src/lithos_lens/frontier_fallback.py",
-      "sloc": 69
+      "sloc": 39
     },
     "lithos_lens.frontier_join": {
       "component": "TaskGraph",
@@ -14675,6 +14816,14 @@
       "max_complexity": 12,
       "path": "src/lithos_lens/frontier_join.py",
       "sloc": 144
+    },
+    "lithos_lens.frontier_reads": {
+      "component": "TaskGraph",
+      "functions": 14,
+      "lines": 199,
+      "max_complexity": 4,
+      "path": "src/lithos_lens/frontier_reads.py",
+      "sloc": 162
     },
     "lithos_lens.gate_completion": {
       "component": "Writes",
@@ -15181,7 +15330,7 @@
       "cross_module_private_refs": 0,
       "max_module_lines": 880,
       "module_cycles": 0,
-      "modules_over_800_lines": 5,
+      "modules_over_800_lines": 4,
       "tests_private_imports": 0
     },
     "budgets": {
@@ -15190,7 +15339,7 @@
       "cross_module_private_refs": 0,
       "max_module_lines": 880,
       "module_cycles": 0,
-      "modules_over_800_lines": 5,
+      "modules_over_800_lines": 4,
       "tests_private_imports": 0
     },
     "enforce_new": false,
@@ -15305,14 +15454,14 @@
         "sloc": 81
       },
       "TaskGraph": {
-        "classes": 72,
-        "functions": 346,
-        "largest_module": "lithos_lens.frontier",
-        "largest_module_lines": 863,
-        "lines": 11665,
-        "modules": 26,
-        "public_symbols": 157,
-        "sloc": 8973
+        "classes": 74,
+        "functions": 357,
+        "largest_module": "lithos_lens.graph_layout",
+        "largest_module_lines": 830,
+        "lines": 11750,
+        "modules": 27,
+        "public_symbols": 159,
+        "sloc": 9059
       },
       "Tasks": {
         "classes": 21,
@@ -15358,19 +15507,18 @@
     "max_module": "lithos_lens.write_funnel",
     "max_module_lines": 880,
     "modules_over_800": [
-      "lithos_lens.frontier",
       "lithos_lens.graph_layout",
       "lithos_lens.tasks",
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 37316,
-    "total_modules": 92,
-    "total_sloc": 29082
+    "total_lines": 37401,
+    "total_modules": 93,
+    "total_sloc": 29168
   },
   "tests": {
     "ratio": 2.04,
-    "src_lines": 37316,
-    "test_lines": 76161
+    "src_lines": 37401,
+    "test_lines": 76368
   }
 }

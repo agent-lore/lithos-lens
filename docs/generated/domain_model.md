@@ -732,6 +732,7 @@ classDiagram
     +error str
     +unmade bool
   }
+  class ReadGeneration
   class ReconciliationStyle {
     +state str
     +label str
@@ -871,6 +872,11 @@ classDiagram
   MiniGraphView "1" --> "0..*" NodeView : nodes
   MiniGraphView "1" --> "1" PageTail : tail
   ProjectRead "1" --> "0..*" BlockedTaskRecord : rows
+  ReadGeneration "1" --> "0..*" BlockedTaskRecord : blocked_result
+  ReadGeneration "1" --> "0..*" TaskRecord : cancelled_result
+  ReadGeneration "1" --> "0..*" TaskRecord : completed_result
+  ReadGeneration "1" --> "0..*" TaskRecord : open_result
+  ReadGeneration "1" --> "0..*" TaskRecord : ready_result
   TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
   TaskDetailData "1" --> "0..*" FindingView : findings
   TaskDetailData "1" --> "1" LinkPage : blockers

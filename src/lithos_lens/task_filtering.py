@@ -386,8 +386,8 @@ def unread_displayed_statuses(
     match" for the windows that answered — suppressing both would hide rows
     Lens does have.
 
-    Takes the gather results verbatim (``list | BaseException``, the shape
-    ``frontier_fallback.resolve_frontier`` also accepts), paired with
+    Takes the gather results verbatim (``list | BaseException``, the shape a
+    ``frontier_reads.ReadGeneration`` slot holds), paired with
     :data:`TERMINAL_STATUS_READS`. The open read is deliberately not part of
     it: without the open snapshot there are no epics to explain, so nothing
     downstream can make the claim in the first place.

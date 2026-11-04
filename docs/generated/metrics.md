@@ -15,7 +15,7 @@
     "seams": "measured",
     "structure": "measured"
   },
-  "config_hash": "7d4923ab474ab581e41828e32e5c42a1ff210e128563e9d3db845d7ceef96e60",
+  "config_hash": "910cc7609c4b547bba4e82658ff844e1f9509db88b6dcbd215d423f8212c8e25",
   "definitions": {
     "complexity": 1,
     "structure": 1,
@@ -50,6 +50,7 @@
         "lithos_lens.dashboard",
         "lithos_lens.gates",
         "lithos_lens.gate_scope",
+        "lithos_lens.frontier_reads",
         "lithos_lens.pr_reconciliation",
         "lithos_lens.task_detail",
         "lithos_lens.task_links",
@@ -112,7 +113,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "31f7251b3e970b4209576bb3b76335c53493c252e30e2124b59a32666df6de1f",
+  "source_hash": "b5b2e4d9ab96c860d8d4e2ba0f459e76513acae8af0579906e785002ae4fa70e",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -142,7 +143,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | `cross_module_private_refs` | 0 | 0 | 0 | invariant |
 | `max_module_lines` | 880 | 880 | 0 | review |
 | `module_cycles` | 0 | 0 | 0 | invariant |
-| `modules_over_800_lines` | 5 | 5 | 0 | review |
+| `modules_over_800_lines` | 4 | 4 | 0 | review |
 | `tests_private_imports` | 0 | 0 | 0 | invariant |
 
 ### Quality review
@@ -167,7 +168,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_complexity | lithos_lens.fake_writes.FakeWriteStore.edge_upsert | 21 | 21 | review | — |
 | unchanged | function_complexity | lithos_lens.fake_writes.FakeWriteStore.reopen | 12 | 12 | review | — |
 | unchanged | function_complexity | lithos_lens.fake_writes.FakeWriteStore.resolve_id | 11 | 11 | review | — |
-| unchanged | function_complexity | lithos_lens.frontier.load_dashboard | 41 | 41 | review | — |
+| unchanged | function_complexity | lithos_lens.frontier.load_dashboard | 39 | 39 | review | — |
 | unchanged | function_complexity | lithos_lens.frontier.load_dashboard._partition_state | 14 | 14 | review | — |
 | unchanged | function_complexity | lithos_lens.frontier_join.classify_open_tasks | 12 | 12 | review | — |
 | unchanged | function_complexity | lithos_lens.gate_scope.load_gate_waits | 22 | 22 | review | — |
@@ -230,7 +231,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos_lens.fake_knowledge_dataset.related_fixtures | 91 | 91 | review | — |
 | unchanged | function_length | lithos_lens.fake_writes.FakeWriteStore.create | 123 | 123 | review | — |
 | unchanged | function_length | lithos_lens.fake_writes.FakeWriteStore.edge_upsert | 111 | 111 | review | — |
-| unchanged | function_length | lithos_lens.frontier.load_dashboard | 580 | 580 | review | — |
+| unchanged | function_length | lithos_lens.frontier.load_dashboard | 528 | 528 | review | — |
 | unchanged | function_length | lithos_lens.gates.attach_gate_waiters | 81 | 81 | review | — |
 | unchanged | function_length | lithos_lens.graph_cycles._signal | 91 | 91 | review | — |
 | unchanged | function_length | lithos_lens.graph_impact.downstream_impact | 77 | 77 | review | — |
@@ -264,7 +265,6 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos_lens.write_funnel.WriteFunnel._attempt | 108 | 108 | review | — |
 | unchanged | function_length | lithos_lens.write_funnel.WriteFunnel._run_create | 101 | 101 | review | — |
 | unchanged | function_length | lithos_lens.write_routes.register_write_routes | 295 | 295 | review | — |
-| unchanged | module_lines | lithos_lens.frontier | 863 | 863 | review | — |
 | unchanged | module_lines | lithos_lens.graph_layout | 830 | 830 | review | — |
 | unchanged | module_lines | lithos_lens.tasks | 854 | 854 | review | — |
 | unchanged | module_lines | lithos_lens.write_errors | 825 | 825 | review | — |
@@ -291,7 +291,7 @@ Optional measurements are source-bound; missing or stale evidence is not a score
 
 ## Import graph
 
-- Cross-component edges: **41** (218 module-level)
+- Cross-component edges: **41** (219 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
@@ -312,7 +312,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 10 | 5109 | 4143 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 115 | 81 | 1 | 5 | 0.83 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 26 | 11665 | 8973 | 4 | 1 | 0.20 | 41 (`lithos_lens.frontier.load_dashboard`) | 27 |
+| TaskGraph | 27 | 11750 | 9059 | 4 | 1 | 0.20 | 39 (`lithos_lens.frontier.load_dashboard`) | 27 |
 | Tasks | 7 | 2233 | 1624 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1239 | 914 | 5 | 2 | 0.29 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 12 | 6226 | 5048 | 1 | 10 | 0.91 | 18 (`lithos_lens.knowledge_routes.register_knowledge_routes.knowledge`) | 9 |
@@ -320,10 +320,9 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **92**, lines: **37316**, SLOC: **29082**
+- Modules: **93**, lines: **37401**, SLOC: **29168**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
-- Modules over 800 lines: **5**
-  - `lithos_lens.frontier`
+- Modules over 800 lines: **4**
   - `lithos_lens.graph_layout`
   - `lithos_lens.tasks`
   - `lithos_lens.write_errors`
@@ -331,7 +330,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **1222**, cyclomatic > 10: **65**
+- Functions: **1233**, cyclomatic > 10: **65**
 - Cyclomatic distribution: median **2**, p90 **8**, max **43**
 - Function length (lines): median 12, p90 45, max 599 (`lithos_lens.fake_dataset.demo_dataset`); over 75: **49**
 
@@ -340,7 +339,7 @@ Top 10 most complex functions:
 | Complexity | Length | Function |
 |---:|---:|---|
 | 43 | 337 | `lithos_lens.config_env.apply_env_overrides` |
-| 41 | 580 | `lithos_lens.frontier.load_dashboard` |
+| 39 | 528 | `lithos_lens.frontier.load_dashboard` |
 | 24 | 91 | `lithos_lens.graph_cycles._signal` |
 | 23 | 36 | `lithos_lens.normalizers.normalize_task` |
 | 22 | 75 | `lithos_lens.gate_scope.load_gate_waits` |
@@ -360,5 +359,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **151** (169 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.04** (76161 test lines / 37316 source lines)
+- Domain models: **152** (174 associations, 16 without docstrings)
+- Test-to-source line ratio: **2.04** (76368 test lines / 37401 source lines)
