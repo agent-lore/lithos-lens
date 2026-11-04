@@ -18,8 +18,9 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.dashboard` | M | 2 | 0 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
-| `lithos_lens.frontier_fallback` | XS | 0 | 2 |
+| `lithos_lens.frontier_fallback` | XS | 0 | 1 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
+| `lithos_lens.frontier_reads` | S | 2 | 1 |
 | `lithos_lens.gate_scope` | S | 1 | 2 |
 | `lithos_lens.gates` | L | 5 | 7 |
 | `lithos_lens.graph_cache` | M | 3 | 2 |
@@ -81,12 +82,16 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 ### `lithos_lens.frontier_fallback`
 - def `flat_open_sections` — Partition open tasks with no usable frontier: one flat ``open`` section.
-- def `resolve_frontier` — Read the two frontier responses into rows and error lines.
 
 ### `lithos_lens.frontier_join`
 - def `approximate_counters` — Name the summary counters the given capped frontier reads understate.
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
 - def `reclassify_conservative` — Apply the conservative read-skew interpretation, flagged for the banner.
+
+### `lithos_lens.frontier_reads`
+- class `GenerationReader` — The three reads a generation issues itself; the caller supplies the two resolved-window reads, bound to its own window arguments.
+- class `ReadGeneration` — The five related reads of one issue, raw: each slot holds the rows or the exception that read raised. The views below are what the join reads; they are derived, never assigned, so no view can outlive its generation.
+- def `read_generation` — Issue the five reads of one generation together.
 
 ### `lithos_lens.gate_scope`
 - class `GateWaits` — Who waits on which open gate, as far as this render could learn.

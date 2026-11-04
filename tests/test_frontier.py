@@ -19,7 +19,7 @@ import pytest
 
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH, build_epic_rollup
 from lithos_lens.frontier import classify_open_tasks, load_dashboard
-from lithos_lens.frontier_fallback import RETRY_FAILED_ERROR
+from lithos_lens.frontier_reads import RETRY_FAILED_ERROR
 from lithos_lens.gates import GATE_WAITER_FANOUT_CAP
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.normalizers import normalize_task

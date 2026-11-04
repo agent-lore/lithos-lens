@@ -2,9 +2,8 @@
 
 Split out of ``frontier.py`` when the T1 slices pushed it past the 800-line
 god-module ceiling. The seam is T1-S12's own subject: ``frontier.py`` owns the
-happy path — the seven parallel reads and the ready/blocked join — while
-everything that decides *there is no usable frontier right now*, and what to
-render instead, lives here.
+happy path — the join over a ``frontier_reads.ReadGeneration`` — while what to
+render when *there is no usable frontier right now* lives here.
 
 One condition produces the flat render: a frontier read that did not answer.
 That covers an outage and, since the pre-0.4 detection was withdrawn (2026-08-24,
@@ -15,17 +14,8 @@ failed read rather than diagnosing a version it has no reason to guess at.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, cast
 
-from lithos_lens.task_graph import BlockedTaskRecord
 from lithos_lens.tasks import SectionName, SectionRow, TaskRecord
-
-# A skewed read could not be re-read. Reported rather than swallowed: the
-# dashboard's affirmative "All systems healthy" stripe is gated on this error
-# channel, and a retry triggered by terminal overlap alone leaves no other
-# trace — the board would otherwise claim health while rendering one task in
-# both an open section and a terminal one.
-RETRY_FAILED_ERROR = "Could not re-read the task graph to reconcile a skewed read."
 
 
 def flat_open_sections(
@@ -55,32 +45,3 @@ def flat_open_sections(
         "claims_unknown": (),
         "unclassified": (),
     }
-
-
-def resolve_frontier(
-    ready_result: Any,
-    blocked_result: Any,
-    *,
-    errors: list[str],
-) -> tuple[bool, list[TaskRecord], list[BlockedTaskRecord]]:
-    """Read the two frontier responses into rows and error lines.
-
-    Returns ``(frontier_ok, ready_rows, blocked_rows)``. A read that did not
-    answer is reported as the failed read it is — including on a server that
-    never had the tool, which Lens does not try to tell apart (the pre-0.4
-    detection was withdrawn; see the module docstring).
-    """
-    frontier_ok = True
-    ready_rows: list[TaskRecord] = []
-    blocked_rows: list[BlockedTaskRecord] = []
-    if isinstance(ready_result, BaseException):
-        errors.append("Could not load the ready frontier.")
-        frontier_ok = False
-    else:
-        ready_rows = cast(list[TaskRecord], ready_result)
-    if isinstance(blocked_result, BaseException):
-        errors.append("Could not load the blocked frontier.")
-        frontier_ok = False
-    else:
-        blocked_rows = cast(list[BlockedTaskRecord], blocked_result)
-    return frontier_ok, ready_rows, blocked_rows

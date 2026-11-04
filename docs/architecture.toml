@@ -48,7 +48,7 @@ LithosClient = ["lithos_lens.lithos_client", "lithos_lens.lithos_writes", "litho
 Config       = ["lithos_lens.config", "lithos_lens.config_env", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Writes       = ["lithos_lens.operator", "lithos_lens.write_guards", "lithos_lens.write_errors", "lithos_lens.receipts", "lithos_lens.gate_completion", "lithos_lens.create_form", "lithos_lens.create_coordinator"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_writes", "lithos_lens.template_vocabulary", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
-TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.gate_scope", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini", "lithos_lens.cancel_consequences", "lithos_lens.relation_sentences"]
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_reads", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.gate_scope", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini", "lithos_lens.cancel_consequences", "lithos_lens.relation_sentences"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by", "lithos_lens.knowledge_search", "lithos_lens.knowledge_edge_evidence", "lithos_lens.knowledge_landing", "lithos_lens.knowledge_tags", "lithos_lens.knowledge_edges", "lithos_lens.knowledge_edge_types", "lithos_lens.knowledge_facts", "lithos_lens.knowledge_graph", "lithos_lens.knowledge_graph_typed", "lithos_lens.knowledge_graph_expansion", "lithos_lens.knowledge_graph_view", "lithos_lens.knowledge_graph_panels", "lithos_lens.knowledge_graph_picker"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
@@ -460,6 +460,21 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # flag_attention calls folded into one. No budget moves; the count stays 6
 # and frontier.py is now 17 lines under the 880 stop-loss.
 #
+# Revisited (task 39b8a91c, 2026-11-04, the fleet audit's "make dashboard read
+# generations explicit"): frontier.py went 863 -> 788. The seam this file's
+# own notes kept naming — "the reads are passed in at the two points the
+# assembly adopts a generation instead of being closed over as locals the
+# skew retry rebinds" (ac1380c1) — is now a module: lithos_lens.frontier_reads
+# owns ReadGeneration (the five related reads of one issue, raw, with the
+# views the join reads off it) and ReadGeneration.adopt, the one place a
+# retry is accepted whole or refused with its warning. load_dashboard keeps
+# the join, the sections, the counters and the degraded-mode policy, and
+# rebinds ONE name (the generation) where it rebound six. frontier_fallback
+# lost resolve_frontier (a view the generation now is) and is 47 lines. No
+# budget moves beyond the count: frontier.py is under the 800 threshold
+# again, so the standing its notes gave it is discharged, and the count goes
+# 5 -> 4 with it. The stop-loss stays 880.
+#
 # Lowered 6 -> 5 on K2 S7: web.py LEFT the >800 set (832 -> 779). The
 # `/tasks/events` stream body moved to event_streams.py so `/knowledge/events`
 # could share it rather than copy it — a real seam (one browser-stream body,
@@ -485,7 +500,7 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # picker mode's own model and snapshot read, which the knowledge landing
 # already imported from this route module for its browse link — a Knowledge
 # model two Web modules share, not routing. Still no budget moves.
-modules_over_800_lines = 5    # write_funnel.py (880), tasks.py (854), frontier.py (863), graph_layout.py (830), write_errors.py (825)
+modules_over_800_lines = 4    # write_funnel.py (880), tasks.py (854), graph_layout.py (830), write_errors.py (825); 5->4 on 39b8a91c: frontier.py LEFT the set (863 -> 788), gain locked in here as this section asks
 max_module_lines       = 880  # stop-loss over those exceptions, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
@@ -505,6 +520,8 @@ include_modules = [
     # GateWaits: who waits on which open gate, and the gates that brings into
     # a scoped board.
     "lithos_lens.gate_scope",
+    # ReadGeneration: the five related dashboard reads of one issue.
+    "lithos_lens.frontier_reads",
     "lithos_lens.pr_reconciliation",
     "lithos_lens.task_detail",
     "lithos_lens.task_links",
