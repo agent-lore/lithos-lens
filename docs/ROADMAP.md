@@ -132,7 +132,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | **shipped** | [k2-knowledge-graph-view.md](./prd/k2-knowledge-graph-view.md) | 0.6.0 |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
 | 7 | **X1** | Both | LLM finding-curation + desktop notifications | planned | — | — |
-| 8 | **K4** | Knowledge | Feed, feedback, cited-by panel | planned | — | — |
+| 8 | **K4** | Knowledge | Feedback buttons, cited-by panel, feed extras (the feed itself shipped in #124) | planned | — | — |
 | 9+ | pool | Knowledge | Conflict-resolution UI, note comparison, reading paths | deferred | — | — |
 
 ### T1 — Graph-Native Operator View (read-only) — SHIPPED in 0.3.0
@@ -345,12 +345,21 @@ attention model), and **builds the server-side debounced recompute** here —
 the transition detector notifications need is the first consumer of a
 server-held derived state.
 
-### K4 — Feed, Feedback, Cited-By
+### K4 — Feedback, Cited-By, Feed Extras
 
-The knowledge feed (chronological browsing), feedback affordances via
-`lithos_note_update` (frontmatter patch — the old read-then-rewrite contract
-is obsolete), and the "cited by findings in tasks X, Y" reverse panel —
-**gated on upstream ask #9** (do not ship the O(all-tasks) scan workaround).
+The knowledge feed itself shipped ahead of this milestone: the `/knowledge`
+landing's **Recent intake** section (REQUIREMENTS §7.1, PR #124, task
+`83c0459e`) lists ingested notes newest-first with metadata chips and tag and
+namespace filters. What K4 still holds:
+
+- **Feedback buttons** (REQUIREMENTS §10) — 👍 / 👎 that set a note's
+  `influx:accepted:<profile>` / `influx:rejected:<profile>` tags via
+  `lithos_note_update` (frontmatter patch — the old read-then-rewrite contract
+  is obsolete). Task `dee3043f`. Influx reads only the rejected tag today.
+- **Cited-by panel** (§6.7) — "cited by findings in tasks X, Y" — **gated on
+  upstream ask #9** (do not ship the O(all-tasks) scan workaround).
+- **Feed extras** (§9) the landing does not have: paging with "Showing N of
+  M", date-range and `note_type` filters, and a lede on each row.
 
 ### Deferred pool
 
