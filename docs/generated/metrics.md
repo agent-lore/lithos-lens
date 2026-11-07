@@ -117,7 +117,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "7b8c7f7cf97416a67d50c595f565a5394ca1e62f4b439640694d5f608b6101d1",
+  "source_hash": "b5dc40558133e89976a104917fe2d9e570a4cdea667ecc6f480ea0180737bd44",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -321,12 +321,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 27 | 11750 | 9059 | 4 | 1 | 0.20 | 39 (`lithos_lens.frontier.load_dashboard`) | 27 |
 | Tasks | 7 | 2233 | 1624 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1239 | 914 | 5 | 2 | 0.29 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 14 | 6701 | 5455 | 1 | 10 | 0.91 | 18 (`lithos_lens.knowledge_routes.register_knowledge_routes.knowledge`) | 10 |
+| Web | 14 | 6706 | 5456 | 1 | 10 | 0.91 | 18 (`lithos_lens.knowledge_routes.register_knowledge_routes.knowledge`) | 10 |
 | Writes | 7 | 2292 | 1675 | 2 | 1 | 0.33 | 12 (`lithos_lens.create_form.validate`) | 1 |
 
 ## Size
 
-- Modules: **98**, lines: **38285**, SLOC: **29909**
+- Modules: **98**, lines: **38290**, SLOC: **29910**
 - Largest module: `lithos_lens.write_funnel` (879 lines)
 - Modules over 800 lines: **4**
   - `lithos_lens.graph_layout`
@@ -366,4 +366,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **155** (175 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.01** (77038 test lines / 38285 source lines)
+- Test-to-source line ratio: **2.02** (77194 test lines / 38290 source lines)

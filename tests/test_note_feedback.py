@@ -20,6 +20,7 @@ import logging
 import re
 from collections.abc import Iterator
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
@@ -101,11 +102,19 @@ class FeedbackFake(FakeLithosClient):
         super().__init__(None, dataset=_dataset())
         self.note_reads: list[tuple[str, int | None]] = []
         self.update_error: Exception | None = None
+        #: Scripted outcomes of the next note reads, in order: an exception
+        #: makes that read fail (Lithos briefly unavailable), None lets it
+        #: through. Empty: every read answers.
+        self.read_errors: list[Exception | None] = []
 
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None
     ) -> NoteRecord | None:
         self.note_reads.append((knowledge_id, max_length))
+        if self.read_errors:
+            error = self.read_errors.pop(0)
+            if error is not None:
+                raise error
         return await super().read_note(knowledge_id, max_length=max_length)
 
     async def note_update(
@@ -176,6 +185,42 @@ def _forms(html: str, note_id: str) -> list[str]:
     action = re.escape(f'action="/note/{note_id}/feedback"')
     return re.findall(
         rf'<form class="feedback-action"[^>]*{action}.*?</form>', html, re.S
+    )
+
+
+class _FormParser(HTMLParser):
+    """One rendered form's method, action, hidden inputs and submit buttons."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.method = ""
+        self.action = ""
+        self.fields: dict[str, str] = {}
+        self.submits: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        found = {key: value or "" for key, value in attrs}
+        if tag == "form":
+            self.method = found.get("method", "get").lower()
+            self.action = found.get("action", "")
+        elif tag == "input" and found.get("name"):
+            self.fields[found["name"]] = found.get("value", "")
+        elif tag == "button" and found.get("type", "submit") == "submit":
+            self.submits.append((found.get("name", ""), found.get("value", "")))
+
+
+def _click(client: TestClient, form: str, verdict: str):
+    """Submit ``form`` as a browser would on a click of its ``verdict`` button:
+    its own method and action, its successful controls, and that button."""
+    parsed = _FormParser()
+    parsed.feed(form)
+    assert parsed.method == "post"
+    [button] = [pair for pair in parsed.submits if pair[1] == verdict]
+    return client.post(
+        unescape(parsed.action),
+        data={**parsed.fields, button[0]: button[1]},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
     )
 
 
@@ -586,3 +631,114 @@ def test_profiles_and_pressed_state_come_from_the_tags() -> None:
         True,
     )
     assert note_feedback(("source:blog",)) == ()
+
+
+# ── round 2: the rendered controls, carried verdicts, warm caches, outages ──
+
+
+@pytest.mark.parametrize("profile", ["ai-coding", "robotics"])
+def test_clicking_a_rendered_button_records_that_rows_profile(
+    client: TestClient, fake: FeedbackFake, profile: str
+) -> None:
+    """The form the landing renders, submitted as the browser submits it: the
+    row's own profile and the clicked verdict reach the write, and the note
+    ends up with exactly that verdict for exactly that profile."""
+    page = client.get("/knowledge").text
+    [form] = [
+        f for f in _forms(page, TWO_ID) if f'data-feedback-profile="{profile}"' in f
+    ]
+
+    response = _click(client, form, "rejected")
+
+    assert response.status_code == 303
+    [sent] = fake.updates()
+    others = [t for t in TWO_TAGS if t != f"influx:accepted:{profile}"]
+    assert sent["tags"] == [*others, f"influx:rejected:{profile}"]
+    assert urlsplit(response.headers["location"]).path == "/knowledge"
+
+
+def test_a_carried_verdict_the_surface_offers_no_button_for_is_still_shown(
+    client: TestClient,
+) -> None:
+    """The note page and the graph panel offer 👎 only; a note already 👍 for
+    a profile says so beside it rather than looking unjudged."""
+    graph = client.get(f"/knowledge/graph?focus={TWO_ID}&selected={TWO_ID}").text
+    note = client.get(f"/note/{TWO_ID}").text
+
+    for page in (note, graph):
+        ai, robotics = _forms(page, TWO_ID)
+        assert _buttons(ai) == {"rejected": "false"}
+        assert 'data-feedback-carried="accepted"' in ai
+        assert "👍 interesting" in unescape(ai)
+        assert "data-feedback-carried" not in robotics
+
+
+@pytest.mark.parametrize("agent_got_there_first", [False, True])
+def test_the_graph_panel_shows_the_verdict_after_its_own_redirect(
+    client: TestClient, fake: FeedbackFake, agent_got_there_first: bool
+) -> None:
+    """A warm note-facts cache, and no ``note.updated`` delivered yet: the
+    redirect back to the selected panel must still render the verdict pressed
+    — whether Lens's patch applied it, or an agent had already applied it and
+    Lens wrote nothing ("Already marked")."""
+    panel = f"/knowledge/graph?focus={INFLUX_ID}&selected={INFLUX_ID}"
+    [before] = _forms(client.get(panel).text, INFLUX_ID)
+    assert _buttons(before) == {"rejected": "false"}
+    # The fake publishes its note.updated synchronously through the app's
+    # hub; detached, every event from here on is one that has not arrived.
+    fake.events = None
+    if agent_got_there_first:
+        asyncio.run(
+            fake.note_update(
+                INFLUX_ID,
+                agent="agent-zero",
+                tags=[*INFLUX_TAGS, "influx:rejected:ai-coding"],
+                expected_version=2,
+            )
+        )
+        fake.write_calls.clear()
+
+    response = _click(client, before, "rejected")
+
+    assert response.status_code == 303
+    assert len(fake.updates()) == (0 if agent_got_there_first else 1)
+    landed = client.get(response.headers["location"]).text
+    if agent_got_there_first:
+        assert "Already marked" in _text(landed)
+    [after] = _forms(landed, INFLUX_ID)
+    assert _buttons(after) == {"rejected": "true"}
+
+
+def test_lithos_unreadable_at_the_pre_check_is_shown_and_nothing_written(
+    client: TestClient, fake: FeedbackFake
+) -> None:
+    fake.read_errors.append(
+        LithosToolError("did not answer within 10s", code="timeout")
+    )
+
+    response = _post(client, INFLUX_ID, "rejected")
+
+    assert response.status_code == 503
+    text = _text(response.text)
+    assert NOTHING_CHANGED in text
+    assert "Lens couldn't read the note, so it didn't try the write." in text
+    assert "location" not in response.headers
+    assert fake.updates() == []
+
+
+def test_lithos_unreadable_at_the_re_read_after_a_conflict_is_shown_no_retry(
+    client: TestClient, fake: FeedbackFake
+) -> None:
+    fake.pending_note_writes.append((*INFLUX_TAGS, "agent:added-meanwhile"))
+    fake.read_errors.extend(
+        [None, LithosToolError("Lithos MCP session is not available")]
+    )
+
+    response = _post(client, INFLUX_ID, "rejected")
+
+    assert response.status_code == 503
+    text = _text(response.text)
+    assert NOTHING_CHANGED in text
+    assert "Lens couldn't read the note" in text
+    assert len(fake.updates()) == 1
+    assert "influx:rejected:ai-coding" not in fake.tags_of(INFLUX_ID)

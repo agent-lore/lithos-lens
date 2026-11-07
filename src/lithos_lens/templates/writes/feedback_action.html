@@ -13,7 +13,8 @@
   Nothing renders for a note with no `profile:<name>` tag. Feedback is
   profile-scoped, so a note in several profiles gets one row each — a verdict
   for one says nothing about the others. A verdict the note already carries
-  renders pressed (`aria-pressed`); clicking the other one changes it. With no
+  renders pressed (`aria-pressed`); clicking the other one changes it. A
+  carried verdict this surface offers no button for is stated as text. With no
   operator identity there is no form (§5C.5) — the verdicts the note carries
   are stated as text, and the chrome's chip offers the choice.
 -#}
@@ -38,6 +39,11 @@
               {%- if verdict == "accepted" %}&#128077;{% else %}&#128078;{% endif -%}
             </button>
           {% endfor %}
+          {#- A verdict the note carries that this surface has no button for
+              (👍 on the note page and the graph panel) is stated beside it,
+              so a judged note never looks unjudged. -#}
+          {% if row.accepted and "accepted" not in feedback_verdicts %}<span class="feedback-verdict" data-feedback-carried="accepted">&#128077; interesting</span>{% endif %}
+          {% if row.rejected and "rejected" not in feedback_verdicts %}<span class="feedback-verdict" data-feedback-carried="rejected">&#128078; not interesting</span>{% endif %}
         </form>
       {% elif row.accepted or row.rejected %}
         <p class="feedback-action" data-feedback-profile="{{ row.profile }}" data-feedback-readonly>

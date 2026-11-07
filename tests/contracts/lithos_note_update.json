@@ -1,6 +1,6 @@
 {
   "tool": "lithos_note_update",
-  "lithos_version": "lithos 0.6.0 @ 2f31f98 (source read 2026-11-07)",
+  "lithos_version": "lithos 0.6.0 @ 2f31f98 (source read 2026-11-07); success, version_conflict, note_not_found (resolver message) and both invalid_input envelopes also probed against a live server built from that commit on 2026-11-07 — identical keys and messages",
   "source": [
     "lithos:src/lithos/tools/notes.py::lithos_note_update (the success payload: status, id, title, path, version, warnings; version_conflict as its own top-level status carrying current_version; every other failure the standard error envelope)",
     "lithos:src/lithos/knowledge.py::KnowledgeManager.update (expected_version compared under the write lock; the 'Version conflict: expected <n>, got <m>' message and current_version)",

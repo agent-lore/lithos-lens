@@ -5511,7 +5511,7 @@
     },
     "lithos_lens.feedback_routes.feedback_write": {
       "complexity": 1,
-      "length": 50,
+      "length": 55,
       "module": "lithos_lens.feedback_routes",
       "path": "src/lithos_lens/feedback_routes.py",
       "paths": [
@@ -5519,8 +5519,8 @@
       ]
     },
     "lithos_lens.feedback_routes.feedback_write.perform": {
-      "complexity": 8,
-      "length": 38,
+      "complexity": 7,
+      "length": 42,
       "module": "lithos_lens.feedback_routes",
       "path": "src/lithos_lens/feedback_routes.py",
       "paths": [
@@ -14895,7 +14895,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "7b8c7f7cf97416a67d50c595f565a5394ca1e62f4b439640694d5f608b6101d1",
+    "source_hash": "b5dc40558133e89976a104917fe2d9e570a4cdea667ecc6f480ea0180737bd44",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -15129,10 +15129,10 @@
     "lithos_lens.feedback_routes": {
       "component": "Web",
       "functions": 12,
-      "lines": 375,
+      "lines": 380,
       "max_complexity": 12,
       "path": "src/lithos_lens/feedback_routes.py",
-      "sloc": 325
+      "sloc": 326
     },
     "lithos_lens.filter_options": {
       "component": "Tasks",
@@ -15861,10 +15861,10 @@
         "functions": 210,
         "largest_module": "lithos_lens.write_funnel",
         "largest_module_lines": 879,
-        "lines": 6701,
+        "lines": 6706,
         "modules": 14,
         "public_symbols": 88,
-        "sloc": 5455
+        "sloc": 5456
       },
       "Writes": {
         "classes": 26,
@@ -15885,13 +15885,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 38285,
+    "total_lines": 38290,
     "total_modules": 98,
-    "total_sloc": 29909
+    "total_sloc": 29910
   },
   "tests": {
-    "ratio": 2.01,
-    "src_lines": 38285,
-    "test_lines": 77038
+    "ratio": 2.02,
+    "src_lines": 38290,
+    "test_lines": 77194
   }
 }

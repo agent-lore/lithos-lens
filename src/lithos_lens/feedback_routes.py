@@ -247,8 +247,9 @@ def feedback_write(
     """The feedback action, as the funnel drives it (§10.2).
 
     ``note_facts`` is the knowledge graph's facts cache: after a patch that
-    applied, the note's entry is marked stale so the graph the redirect may
-    land on reads its tags again, as the ``note.updated`` event would.
+    applied — or a read that found the verdict already there — the note's
+    entry is marked stale, so the graph the redirect may land on reads its
+    tags again rather than waiting for a ``note.updated`` event.
     """
 
     async def perform(
@@ -270,7 +271,11 @@ def feedback_write(
                 client, operator, ledger, note_id, profile, chosen, retried=attempt > 0
             )
             if not isinstance(outcome, _Lost):
-                if isinstance(outcome, WriteDone) and outcome.answer:
+                if isinstance(outcome, WriteDone):
+                    # "Already marked" too: the read just now may be the
+                    # first to see an agent's verdict whose note.updated has
+                    # not arrived, and the page this redirects to must not
+                    # draw from facts older than that read.
                     note_facts.apply_note_event(
                         NOTE_UPDATED, {"id": outcome.task.task_id}
                     )

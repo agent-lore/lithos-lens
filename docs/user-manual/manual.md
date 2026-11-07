@@ -130,6 +130,9 @@ One knowledge action needs no confirmation page, because it only tags a note: **
 1. Each result card shows the note's title, its chips (type, status, namespace, confidence), its path, a snippet of its text and when it was last updated. Archived notes say so in their status chip.
 2. Click a title to open the [note](#knowledge-notes); click **in graph** to open the [knowledge graph](#the-knowledge-graph) centred on that note.
 3. **Recent intake** rows that Influx ingested for a profile carry **👍** and **👎** buttons, one pair per profile, labelled with the profile's name. **👎** tells Influx the article is not interesting for that profile — Influx uses it as a negative example and does not re-add the note to the profile; **👍** records that it is interesting. Lens writes the verdict as a tag on the note (`influx:rejected:<profile>` or `influx:accepted:<profile>`), recorded as your operator identity, and removes the opposite verdict for that profile; nothing else about the note changes. A verdict the note already carries shows as a pressed button; click the other one to change it. After a click the page reloads with a banner confirming what was recorded. If the note changed while Lens was writing, Lens reads it again and retries once; if it changed again, or Lithos refused, Lens says so and states that nothing was changed. The buttons appear only once you have chosen an operator; without one, a verdict the note carries is shown as text.
+
+![](screenshots/knowledge-feedback.png)
+
 4. **Browse tags** opens `/knowledge/tags`, every tag in the knowledge base with how many notes carry it, most notes first. Type in **Filter tags** to narrow the list, or click a prefix such as `project:` or `source:` to show only the tags that start with it. Click a tag to list the notes carrying it.
 
 ![](screenshots/knowledge-tags.png)
@@ -154,7 +157,9 @@ Notes ingested from the web carry a link to the original:
 
 6. **Source** links to the article or page the note was made from. Only an ordinary web address is a link; any other value is shown as plain text.
 7. Some sites cannot be archived — Influx does not fetch some domains, some sites block it, and some links are not articles at all. For such a note the article body is missing, and Lens explains why under the source line: the reason Influx recorded, that Influx will not retry, and that the original is at the source link.
-8. A note Influx ingested for a profile shows a **👎** button for each of its profiles in its header, to mark it not interesting for that profile (see [Knowledge](#knowledge)); it shows pressed when the note already carries that verdict.
+8. A note Influx ingested for a profile shows a **👎** button for each of its profiles in its header, to mark it not interesting for that profile (see [Knowledge](#knowledge)); it shows pressed when the note already carries that verdict. A profile the note is already marked interesting for says **👍 interesting** beside its button.
+
+![](screenshots/note-feedback.png)
 
 ---
 
