@@ -54,6 +54,7 @@ from lithos_lens.lithos_client import (
     LithosClientProtocol,
     LithosToolError,
 )
+from lithos_lens.note_writes import NoteUpdateResult
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.task_writes import (
     TaskCancelResult,
@@ -313,6 +314,16 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
     # literally, an AMBIGUOUS one is refused (resolve_id_lenient).
     "lithos_edge_list": {("ambiguous_id_prefix", "is ambiguous")},
     "lithos_finding_list": {("invalid_input", "")},
+    # The feedback write (K4). Two not-found messages under one code: the
+    # resolver's for an id that matches nothing, and the update's own for a
+    # note deleted between that resolution and the write.
+    "lithos_note_update": {
+        ("note_not_found", "Document not found: "),
+        ("note_not_found", " not found"),
+        ("invalid_input", "is too short"),
+        ("invalid_input", "At least one of title, tags, status, or metadata"),
+        ("ambiguous_id_prefix", "is ambiguous"),
+    },
 }
 
 #: Response variants a contract must keep, by name — each one is a payload
@@ -328,6 +339,9 @@ REQUIRED_RESPONSE_VARIANTS: dict[str, set[str]] = {
     # An ingested note: a string source_url and Influx's archive-outcome tags,
     # which the note page's source line and archive notice are built from.
     "lithos_read": {"influx_archive_terminal"},
+    # A stale expected_version: an ANSWER with its own top-level status, not
+    # an error envelope — the feedback write re-reads and retries on it.
+    "lithos_note_update": {"version_conflict"},
 }
 
 #: The EXACT key set of each canonical success payload. Exact rather than a
@@ -355,6 +369,8 @@ REQUIRED_SUCCESS_KEYS: dict[str, set[str]] = {
     "lithos_tags": {"tags"},
     # The one container key: no limit, offset, order or total beside it.
     "lithos_edge_list": {"results"},
+    # `status` is the success signal ("updated"); no `success` flag.
+    "lithos_note_update": {"status", "id", "title", "path", "version", "warnings"},
 }
 
 
@@ -422,9 +438,11 @@ def test_every_tool_that_resolves_an_id_vendors_an_ambiguous_envelope() -> None:
     and so does ``lithos_task_get``, which the relation confirm step resolves
     a typed prefix with (T3-W8, D8). ``lithos_edge_list`` resolves its
     ``from_id`` / ``to_id`` filters through the note resolver, which refuses
-    an ambiguous prefix the same way (K2 S1)."""
+    an ambiguous prefix the same way (K2 S1), and so does
+    ``lithos_note_update`` (K4), whose ``id`` goes through the same resolver."""
     assert {tool for tool, _ in _ambiguous_envelopes()} == {
         "lithos_edge_list",
+        "lithos_note_update",
         "lithos_task_get",
         "lithos_task_complete",
         "lithos_task_reopen",
@@ -788,6 +806,23 @@ def _check_create(result: Any, success: dict[str, Any]) -> None:
     )
 
 
+def _check_note_update(result: Any, success: dict[str, Any]) -> None:
+    assert result == NoteUpdateResult(
+        status=success["status"],
+        note_id=success["id"],
+        title=success["title"],
+        path=success["path"],
+        version=success["version"],
+        current_version=None,
+        message="",
+    )
+
+
+#: The feedback write's canonical request, as vendored: the Influx note's tags
+#: with the verdict appended, sent with the version the read returned.
+_NOTE_UPDATE_REQUEST = load_contract("lithos_note_update")["request"]["canonical"]
+
+
 def _check_edge_upsert(result: Any, success: dict[str, Any]) -> None:
     assert result == TaskEdgeUpsertResult(
         success=success["success"],
@@ -921,6 +956,15 @@ TOOL_SPECS: dict[
         ),
         _check_edge_upsert,
     ),
+    "lithos_note_update": (
+        lambda c: c.note_update(
+            _NOTE_UPDATE_REQUEST["id"],
+            agent="dave",
+            tags=list(_NOTE_UPDATE_REQUEST["tags"]),
+            expected_version=_NOTE_UPDATE_REQUEST["expected_version"],
+        ),
+        _check_note_update,
+    ),
     "lithos_stats": (lambda c: c.stats(), _check_stats),
     "lithos_agent_list": (lambda c: c.list_agents(), _check_agents),
     "lithos_agent_info": (lambda c: c.agent_info("dave"), _check_agent_info),
@@ -1026,6 +1070,19 @@ RESPONSE_VARIANT_SPECS[("lithos_edge_list", "empty")] = (
     lambda c: c.edge_list(type="no-such-type"),
     lambda result, payload: _assert_equal(result, ()),
 )
+RESPONSE_VARIANT_SPECS[("lithos_note_update", "version_conflict")] = (
+    TOOL_SPECS["lithos_note_update"][0],
+    # Returned, not raised, with the version the note is at now and no
+    # post-write fields — nothing was written.
+    lambda result, payload: _assert_equal(
+        result,
+        NoteUpdateResult(
+            status="version_conflict",
+            current_version=payload["current_version"],
+            message=payload["message"],
+        ),
+    ),
+)
 RESPONSE_VARIANT_SPECS[("lithos_read", "influx_archive_terminal")] = (
     lambda c: c.read_note("22222222-2222-4222-8222-222222222222"),
     _check_note,
@@ -1073,6 +1130,7 @@ WRITE_METHODS = (
     "task_cancel",
     "task_create",
     "task_edge_upsert",
+    "note_update",
 )
 
 
@@ -1451,6 +1509,18 @@ def test_read_note_by_path_sends_the_vendored_variant_request() -> None:
     )
     assert calls == [("lithos_read", contract["request"]["variants"]["by_path"])]
     assert result == _expected_note(contract["responses"]["success"])
+
+
+def test_a_truncated_read_by_id_sends_the_vendored_variant_request() -> None:
+    """The feedback write's pre-check (§10.2) is lithos_read's
+    ``by_id_truncated`` request variant: the tags and version, not the body."""
+    contract = load_contract("lithos_read")
+    variant = contract["request"]["variants"]["by_id_truncated"]
+    _, calls = _run(
+        contract["responses"]["variants"]["influx_archive_terminal"],
+        lambda c: c.read_note(variant["id"], max_length=1),
+    )
+    assert calls == [("lithos_read", variant)]
 
 
 def test_recent_notes_sends_the_recent_variant_and_sorts_newest_first() -> None:

@@ -173,6 +173,8 @@ async def test_reads_carry_the_frontmatter_facts_through_build_note_metadata(
         namespace="plans",
         confidence="90%",
         lede="Cut ingest over first, backfill after; abort via the feature gate.",
+        # As read, for the node panel's feedback button (K4).
+        tags=("project:influx", "kind:plan"),
     )
     assert answer.label == "Influx migration plan"
     assert reader.calls == [PLAN]

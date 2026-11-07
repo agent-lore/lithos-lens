@@ -70,7 +70,7 @@ from typing import Any, Literal
 #: Carried on every problem so the funnel's one log line names the action
 #: without the route restating it.
 WriteAction = Literal[
-    "complete", "reopen", "cancel", "create", "edge_upsert", "edge_remove"
+    "complete", "reopen", "cancel", "create", "edge_upsert", "edge_remove", "feedback"
 ]
 
 #: Which of the three endings a problem is, which is also which surface answers

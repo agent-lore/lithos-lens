@@ -6,7 +6,9 @@
    same /knowledge?q= but would drop the tag and namespace filters. #}
 {% block nav_search %}{% endblock %}
 
-{% macro recent_rows(rows) %}
+{#- `feedback`: the Recent intake rows carry the 👍 / 👎 buttons (K4, §10.3),
+    one pair per profile the note is in, read off the row's own tags. -#}
+{% macro recent_rows(rows, feedback=false) %}
   {% if rows %}
     <ul class="knowledge-results">
       {% for note in rows %}
@@ -20,6 +22,11 @@
           {% endif %}
           {% if note.updated %}
             <span class="knowledge-result-updated">{{ note.updated | display_date }}</span>
+          {% endif %}
+          {% if feedback %}
+            {% with feedback_note_id = note.id, feedback_tags = note.tags, feedback_verdicts = feed_verdicts, feedback_next = landing_url %}
+              {% include "writes/feedback_action.html" %}
+            {% endwith %}
           {% endif %}
         </li>
       {% endfor %}
@@ -151,7 +158,7 @@
       {% if browse.intake is not none %}
         <section class="knowledge-section" id="recent-intake">
           {{ section_heading("intake", "Recent intake") }}
-          {{ recent_rows(browse.intake) }}
+          {{ recent_rows(browse.intake, feedback=true) }}
         </section>
       {% endif %}
       {% if section %}

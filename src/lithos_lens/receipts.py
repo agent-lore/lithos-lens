@@ -36,6 +36,7 @@ __all__ = [
     "CancelFacts",
     "CreateFacts",
     "EdgeFacts",
+    "FeedbackFacts",
     "MAX_RECEIPTS",
     "MAX_TITLED_RELEASES",
     "RECEIPT_KEY",
@@ -176,6 +177,22 @@ class EdgeFacts:
 
 
 @dataclass(frozen=True)
+class FeedbackFacts:
+    """What a relevance-feedback write recorded on a note (K4, §10).
+
+    ``verdict`` is ``accepted`` or ``rejected``, for ``profile``.
+    ``unchanged`` means the note already carried exactly that verdict and not
+    the opposite, so Lens wrote nothing; ``retried`` that the write landed on
+    its retry, after the note changed under the first attempt.
+    """
+
+    profile: str
+    verdict: str
+    unchanged: bool = False
+    retried: bool = False
+
+
+@dataclass(frozen=True)
 class WriteReceipt:
     """One write's outcome, as the banner states it.
 
@@ -205,7 +222,9 @@ class WriteReceipt:
     path is no page to come back to.
     ``cancel`` is a cancel's :class:`CancelFacts` (T3-W6), ``created`` a
     create's :class:`CreateFacts` (T3-W7), and ``edge`` an add-dependency's
-    :class:`EdgeFacts` (T3-W8); each is None for every other action.
+    :class:`EdgeFacts` (T3-W8), and a note feedback (K4) its
+    :class:`FeedbackFacts` — its ``task`` then names the NOTE; each is None for
+    every other action.
     """
 
     action: str
@@ -223,6 +242,7 @@ class WriteReceipt:
     cancel: CancelFacts | None = None
     created: CreateFacts | None = None
     edge: EdgeFacts | None = None
+    feedback: FeedbackFacts | None = None
 
     @property
     def released_more(self) -> int:

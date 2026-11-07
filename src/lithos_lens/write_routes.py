@@ -33,6 +33,8 @@ What this module owns, and what every later slice reuses:
 - ``GET /tasks/{task_id}/edges/new`` and ``POST /tasks/{task_id}/edges``
   (T3-W8) — add a dependency in sentences, with a confirm step, in
   ``edge_routes``, registered from here the same way.
+- ``POST /note/{note_id}/feedback`` (K4) — 👍 / 👎 on an Influx note for one
+  of its profiles, a tag patch, in ``feedback_routes``, the same way.
 
 There is deliberately NO posture switch (D2): the routes are always registered
 and the affordances are part of the page. What decides whether an affordance
@@ -56,6 +58,7 @@ from fastapi.templating import Jinja2Templates
 from lithos_lens.cancel_routes import register_cancel_routes
 from lithos_lens.create_routes import register_create_routes
 from lithos_lens.edge_routes import register_edge_routes
+from lithos_lens.feedback_routes import register_feedback_routes
 from lithos_lens.gate_completion import (
     MAX_NOTE_LENGTH,
     PROCEED_ANYWAY_CONFIRMATION,
@@ -423,6 +426,8 @@ def register_write_routes(
     register_create_routes(app, state, templates, funnel)
     # Add a dependency (T3-W8): the relation confirm step and the edge write.
     register_edge_routes(app, state, templates, funnel)
+    # Relevance feedback on an Influx note (K4, §10): one tag patch.
+    register_feedback_routes(app, state, templates, funnel)
 
     def render(
         request: Request,

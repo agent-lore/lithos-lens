@@ -20,13 +20,19 @@
       <h1>Lens did not hear back</h1>
     {% elif problem.kind == "conflict" %}
       <p class="eyebrow">Write refused</p>
-      <h1>The task changed</h1>
+      <h1>The {{ "note" if problem.action == "feedback" else "task" }} changed</h1>
     {% else %}
       <p class="eyebrow">Write refused</p>
       <h1>Lens didn't make this change</h1>
     {% endif %}
   </header>
-  {% if problem.subject.label %}
+  {#- A feedback write's subject is a NOTE (K4): named by its title, and the
+      way on is the note page rather than a task's. -#}
+  {% if problem.action == "feedback" %}
+    {% if problem.subject.title %}
+      <p class="write-outcome-subject">{{ problem.subject.title }}</p>
+    {% endif %}
+  {% elif problem.subject.label %}
     <p class="write-outcome-subject">
       {{ problem.subject.label }}
       {% with task_id = problem.subject.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
@@ -34,7 +40,9 @@
   {% endif %}
   {% include "writes/notice.html" %}
   <p class="write-outcome-actions">
-    {% if problem.subject.task_id %}
+    {% if problem.action == "feedback" and problem.subject.task_id %}
+      <a href="/note/{{ problem.subject.task_id | urlencode }}">Open the note</a>
+    {% elif problem.subject.task_id %}
       <a href="{{ task_detail_url(request, problem.subject.task_id) }}">Open the task</a>
     {% else %}
       <a href="/tasks">Back to the board</a>

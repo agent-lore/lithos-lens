@@ -221,6 +221,7 @@ classDiagram
     +namespace str
     +confidence str
     +lede str
+    +tags tuple[str, ...]
   }
   class NoteFactsAnswer {
     +id str
@@ -254,10 +255,24 @@ classDiagram
     +source_text str
     +archive_notice str
   }
+  class NoteUpdateResult {
+    +status str
+    +note_id str
+    +title str
+    +path str
+    +version int | None
+    +current_version int | None
+    +message str
+  }
   class ProducedByTask {
     +task_id str
     +title str
     +is_task_record bool
+  }
+  class ProfileFeedback {
+    +profile str
+    +accepted bool
+    +rejected bool
   }
   class ProvenanceFacet {
     +group str
@@ -1131,6 +1146,12 @@ classDiagram
     +created_by str
     +created_at str
   }
+  class FeedbackFacts {
+    +profile str
+    +verdict str
+    +unchanged bool
+    +retried bool
+  }
   class FieldError {
     +message str
   }
@@ -1207,6 +1228,7 @@ classDiagram
   WriteReceipt "1" --> "0..1" CancelFacts : cancel
   WriteReceipt "1" --> "0..1" CreateFacts : created
   WriteReceipt "1" --> "0..1" EdgeFacts : edge
+  WriteReceipt "1" --> "0..1" FeedbackFacts : feedback
   WriteReceipt "1" --> "0..*" ReceiptTask : released
   WriteReceipt "1" --> "1" ReceiptTask : task
 ```

@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets) and the two browser SSE streams (`/tasks/events`, `/knowledge/events`) over one shared stream body, plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the "not visible yet" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or "already exists") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it.
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets) and the two browser SSE streams (`/tasks/events`, `/knowledge/events`) over one shared stream body, plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the "not visible yet" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or "already exists") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it; and the relevance-feedback route (👍 / 👎 on an Influx note for one of its profiles): the funnel's note entry, whose action reads the note's tags and version, patches the tags with that version as `expected_version`, and re-reads and retries once on a version conflict; with the audit record every attempt leaves (one log line, one span's attributes, one counter increment) in its own module.
 
 **Tier:** Entrypoints
 
@@ -15,13 +15,15 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.create_routes` | S | 0 | 3 |
 | `lithos_lens.edge_routes` | M | 0 | 4 |
 | `lithos_lens.event_streams` | XS | 0 | 1 |
+| `lithos_lens.feedback_routes` | M | 0 | 3 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
 | `lithos_lens.knowledge_graph_routes` | L | 3 | 10 |
 | `lithos_lens.knowledge_routes` | M | 2 | 5 |
 | `lithos_lens.request_filters` | L | 0 | 26 |
 | `lithos_lens.web` | L | 0 | 1 |
-| `lithos_lens.write_funnel` | L | 5 | 1 |
+| `lithos_lens.write_audit` | XS | 1 | 1 |
+| `lithos_lens.write_funnel` | L | 6 | 1 |
 | `lithos_lens.write_routes` | M | 0 | 11 |
 
 ## Public API
@@ -46,6 +48,11 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 ### `lithos_lens.event_streams`
 - def `event_stream_response` — The open stream for one browser on ``stream``, or a 503 at capacity.
+
+### `lithos_lens.feedback_routes`
+- def `note_feedback_path` — The feedback POST target, the id as ONE encoded segment.
+- def `feedback_write` — The feedback action, as the funnel drives it (§10.2).
+- def `register_feedback_routes` — Attach the feedback POST and the template globals its buttons use.
 
 ### `lithos_lens.gate_override`
 - class `GateOverride` — One open machine-owned gate, as its Proceed anyway page states it.
@@ -111,11 +118,16 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 ### `lithos_lens.web`
 - def `create_app` — Create the Lithos Lens ASGI app.
 
+### `lithos_lens.write_audit`
+- class `WriteLedger` — One attempt's audit fields, filled in as the funnel learns them.
+- def `record_attempt` — One attempt's span attributes, counter increment and audit line.
+
 ### `lithos_lens.write_funnel`
 - def `origin_refusal` — 403 for a cross-origin POST, or ``None`` to let the handler run.
 - class `WriteForm` — What a route parsed out of its form: the funnel's whole input from it.
 - class `WriteDone` — What a write that applied reported: the receipt's raw material.
 - class `TaskWrite` — One action on an existing task, as the funnel drives it.
+- class `NoteWrite` — One action on an existing NOTE, as the funnel drives it (K4 feedback).
 - class `CreateWrite` — A create, as the funnel drives it (T3-W7, D1).
 - class `WriteFunnel` — The one function every curated write goes through (D4).
 

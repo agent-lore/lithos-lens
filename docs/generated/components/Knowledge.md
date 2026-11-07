@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, the tag browse page's ranked counts and key: family facet, and wiki-link resolution recording which arm decided; plus the knowledge graph's data layer — the edge-table snapshot (the whole Lithos edge table from one unfiltered read, its endpoint/type/namespace indexes and picker facets, held under a TTL with single-flight, refused over its row bound with filtered reads still served, served stale when a refetch fails, and patched from edge.upserted) and the known edge-type table (direction, symmetry, style, unknown types drawn as recorded, and the legend lines); the note facts cache behind every graph node (title, type, status, namespace, confidence and lede from a gated, per-render-capped `lithos_read(max_length=1)` fan-out under a TTL, the missing-note ghost for `doc_not_found`, and the note-event patches that set a title and mark the rest stale); and the graph assembly over them — focus (ego) graphs at depth 1 or 2 and scoped-global graphs by type and/or namespace, the weight and provenance filters applied before expansion and the cap, the node cap as a refusal naming its remedy, the would-be node count per depth, hidden-edge counts, the one-hop wiki-link and provenance layers from one `lithos_related` read, degree in view, the facts read order — with its pure, snapshot-only typed half apart from the reads, and the in-place expansion pass (`expand=`: requests in URL order against the capped base and the focus's layers, unreached and per-request refusals, the cap count apart from visible additions, every drawn note's eligibility, and the collapse set with its transitive `via` dependants) — and the view model and JSON payload the page renders, with the node and edge panels read from it and the unscoped page's scope picker.
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, the tag browse page's ranked counts and key: family facet, and wiki-link resolution recording which arm decided; plus the knowledge graph's data layer — the edge-table snapshot (the whole Lithos edge table from one unfiltered read, its endpoint/type/namespace indexes and picker facets, held under a TTL with single-flight, refused over its row bound with filtered reads still served, served stale when a refetch fails, and patched from edge.upserted) and the known edge-type table (direction, symmetry, style, unknown types drawn as recorded, and the legend lines); the note facts cache behind every graph node (title, type, status, namespace, confidence and lede from a gated, per-render-capped `lithos_read(max_length=1)` fan-out under a TTL, the missing-note ghost for `doc_not_found`, and the note-event patches that set a title and mark the rest stale); and the graph assembly over them — focus (ego) graphs at depth 1 or 2 and scoped-global graphs by type and/or namespace, the weight and provenance filters applied before expansion and the cap, the node cap as a refusal naming its remedy, the would-be node count per depth, hidden-edge counts, the one-hop wiki-link and provenance layers from one `lithos_related` read, degree in view, the facts read order — with its pure, snapshot-only typed half apart from the reads, and the in-place expansion pass (`expand=`: requests in URL order against the capped base and the focus's layers, unreached and per-request refusals, the cap count apart from visible additions, every drawn note's eligibility, and the collapse set with its transitive `via` dependants) — and the view model and JSON payload the page renders, with the node and edge panels read from it and the unscoped page's scope picker; plus relevance feedback on an Influx note — the profiles it carries, the verdict tags per profile, and the tag patch that records one verdict and drops the other — and the `lithos_note_update` wire (its request builder and result record).
 
 **Tier:** Foundation
 
@@ -28,6 +28,8 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
 | `lithos_lens.knowledge_search` | XS | 1 | 1 |
 | `lithos_lens.knowledge_tags` | S | 3 | 6 |
+| `lithos_lens.note_feedback` | S | 1 | 5 |
+| `lithos_lens.note_writes` | XS | 1 | 2 |
 
 ## Public API
 
@@ -189,6 +191,19 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - def `tag_family` — A tag's family, ``key:`` — or ``""`` when it has no key before a colon.
 - def `tag_families` — The families present in ``tags``, most tags first (ties by name).
 - def `build_tag_browse` — Filter the ranked ``rows`` by ``prefix`` and ``query``, then cut to ``limit``.
+
+### `lithos_lens.note_feedback`
+- def `is_verdict` — Whether a posted value is one of the two verdicts, exactly.
+- def `verdict_tag` — The tag that records ``verdict`` for ``profile``.
+- def `note_profiles` — The profiles a note was ingested for, in tag order, each once.
+- class `ProfileFeedback` — One profile's verdict buttons on a note: which of the two is pressed.
+- def `note_feedback` — One :class:`ProfileFeedback` per profile the note carries; none without.
+- def `apply_verdict` — The note's full tag list with ``verdict`` recorded for ``profile``.
+
+### `lithos_lens.note_writes`
+- class `NoteUpdateResult` — ``lithos_note_update``: the patch applied, or the version it lost to.
+- def `note_update_arguments` — The tag patch, as sent: the FULL new list and the version it was read at.
+- def `normalize_note_update` — A non-error ``lithos_note_update`` answer as a :class:`NoteUpdateResult`.
 
 ## Dependencies
 

@@ -1,0 +1,88 @@
+{
+  "tool": "lithos_note_update",
+  "lithos_version": "lithos 0.6.0 @ 2f31f98 (source read 2026-11-07)",
+  "source": [
+    "lithos:src/lithos/tools/notes.py::lithos_note_update (the success payload: status, id, title, path, version, warnings; version_conflict as its own top-level status carrying current_version; every other failure the standard error envelope)",
+    "lithos:src/lithos/knowledge.py::KnowledgeManager.update (expected_version compared under the write lock; the 'Version conflict: expected <n>, got <m>' message and current_version)",
+    "lithos:src/lithos/intake.py::IntakeService.note_update (body untouched — content=None; emits note.updated {id, title, path} on success)",
+    "lithos:src/lithos/tools/_seam.py::resolve_note_id,tool_span (note_not_found for an unmatched id, invalid_input for a too-short prefix, ambiguous_id_prefix with {id, title} candidates)",
+    "lithos:src/lithos/knowledge.py::KnowledgeManager.resolve_id (the too-short and 'Document not found' messages)",
+    "lithos:src/lithos/errors.py::AmbiguousIdPrefixError",
+    "lithos:src/lithos/envelopes.py::error_envelope,invalid_input_envelope",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_note_update"
+  ],
+  "request": {
+    "canonical": {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "agent": "dave",
+      "tags": [
+        "profile:ai-coding",
+        "source:blog",
+        "feed-slug:openai-news",
+        "ingested-by:influx",
+        "schema:1",
+        "influx:archive-unsupported",
+        "influx:archive-terminal",
+        "influx:rejected:ai-coding"
+      ],
+      "expected_version": 2
+    },
+    "notes": "Lens sends `tags` only, always with `expected_version` (REQUIREMENTS §10.2): `tags` REPLACES the note's whole list (null/omit preserves it, `[]` clears it), so Lens first reads the note (`lithos_read(id, max_length=1)` — a truncated read keeps the full frontmatter, `metadata.version` included), edits that list, and sends it with the version it read. The canonical request is the vendored `lithos_read` `influx_archive_terminal` note (version 2) with `influx:rejected:ai-coding` appended — every other tag byte-for-byte as read. Also accepted, never sent by Lens: `title` (a rename may collide — `slug_collision`), `status` (active|archived|quarantined), `metadata` (an additive per-key merge; null deletes a key; `{}` is no change). At least one of title/tags/status/metadata must be given. `id` goes through the note resolver: a full id or an unambiguous prefix of at least 6 characters. `agent` is the attributed writer — Lens passes the OPERATOR. The body is never read into or out of the request; a successful patch bumps `version` and emits `note.updated` with `{id, title, path}`."
+  },
+  "responses": {
+    "success": {
+      "status": "updated",
+      "id": "22222222-2222-4222-8222-222222222222",
+      "title": "How to manage AI investments in the agentic era",
+      "path": "articles/blog/2026/07/how-to-manage-ai-investments-in-the-agentic-era.md",
+      "version": 3,
+      "warnings": []
+    },
+    "variants": {
+      "version_conflict": {
+        "status": "version_conflict",
+        "message": "Version conflict: expected 2, got 3",
+        "warnings": [],
+        "current_version": 3
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "note_not_found",
+        "message": "Document not found: 22222222-2222-4222-8222-222222222222"
+      },
+      {
+        "status": "error",
+        "code": "note_not_found",
+        "message": "Note 22222222-2222-4222-8222-222222222222 not found"
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "id '2222' is too short: pass the full document id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "At least one of title, tags, status, or metadata must be provided (an empty metadata dict makes no change)."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Note id prefix '222222' is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "title": "How to manage AI investments in the agentic era"
+          },
+          {
+            "id": "22222222-9999-4999-8999-999999999999",
+            "title": "Agentic coding budgets, revisited"
+          }
+        ]
+      }
+    ]
+  },
+  "observed_divergences": ""
+}
