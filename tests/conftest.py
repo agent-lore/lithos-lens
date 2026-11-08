@@ -14,7 +14,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-from lithos_lens import task_writes
+from lithos_lens import note_writes, task_writes
 from lithos_lens.config import load_config
 from lithos_lens.telemetry import setup_telemetry, shutdown_telemetry
 
@@ -381,7 +381,7 @@ def metric_value(reader: InMemoryMetricReader, name: str, **labels: str) -> Any:
 
 
 class ReadOnlyWriteSurface:
-    """The protocol's five write methods, refused — for read-path doubles.
+    """The protocol's write methods, refused — for read-path doubles.
 
     T3-W3 put the task writes on ``LithosClientProtocol``, so every double the
     app factory accepts has to carry them. The doubles in this suite drive READ
@@ -431,4 +431,14 @@ class ReadOnlyWriteSurface:
         agent: str,
         metadata: dict[str, Any] | None = None,
     ) -> task_writes.TaskEdgeUpsertResult:
+        raise NotImplementedError(_READ_ONLY_DOUBLE)
+
+    async def note_update(
+        self,
+        note_id: str,
+        *,
+        agent: str,
+        tags: tuple[str, ...] | list[str],
+        expected_version: int,
+    ) -> note_writes.NoteUpdateResult:
         raise NotImplementedError(_READ_ONLY_DOUBLE)

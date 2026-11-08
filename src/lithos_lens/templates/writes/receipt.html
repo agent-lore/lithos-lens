@@ -152,5 +152,23 @@
     {% else %}
       <p class="write-receipt-detail" data-receipt-outcome>Added as {{ receipt.operator }}.</p>
     {% endif %}
+  {% elif receipt.action == "feedback" and receipt.feedback %}
+    {#- Relevance feedback (K4, §10): the verdict, for which profile, on which
+        note. `task` names the note here. "Already marked" wrote nothing. -#}
+    {% set feedback = receipt.feedback %}
+    <p class="write-receipt-headline" data-receipt-feedback="{{ feedback.verdict }}" data-receipt-feedback-unchanged="{{ 'yes' if feedback.unchanged else 'no' }}">
+      {{ "&#128077;" | safe if feedback.verdict == "accepted" else "&#128078;" | safe }}
+      {{ "Already marked" if feedback.unchanged else "Marked" }}
+      &ldquo;<a href="/note/{{ receipt.task.task_id | urlencode }}">{{ receipt.task.title or receipt.task.task_id }}</a>&rdquo;
+      {{ "interesting" if feedback.verdict == "accepted" else "not interesting" }} for profile {{ feedback.profile }}
+    </p>
+    <p class="write-receipt-detail" data-receipt-outcome>
+      {%- if feedback.unchanged -%}
+        The note already carried this verdict, so nothing was written.
+      {%- else -%}
+        Recorded as {{ receipt.operator }}.
+        {%- if feedback.retried %} The note changed while Lens was writing, so Lens read it again and applied your verdict to it as it is now.{% endif %}
+      {%- endif -%}
+    </p>
   {% endif %}
 </section>

@@ -90,7 +90,9 @@ class NoteFacts:
 
     The five come from :func:`~lithos_lens.knowledge_metadata.build_note_metadata`,
     so ``confidence`` is the K1 chip's formatted percentage ("85%") and the
-    panel's chip partial reads the same values the note page does.
+    panel's chip partial reads the same values the note page does. ``tags`` are
+    the note's tags as read, for the node panel's feedback button (K4): which
+    profiles it is in and the verdicts it carries.
     """
 
     title: str = ""
@@ -99,6 +101,7 @@ class NoteFacts:
     namespace: str = ""
     confidence: str = ""
     lede: str = ""
+    tags: tuple[str, ...] = ()
 
 
 def note_facts(note: NoteRecord) -> NoteFacts:
@@ -111,6 +114,7 @@ def note_facts(note: NoteRecord) -> NoteFacts:
         namespace=meta.namespace,
         confidence=meta.confidence,
         lede=meta.lede,
+        tags=note.tags,
     )
 
 

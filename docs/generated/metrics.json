@@ -57,7 +57,7 @@
         "max_function": "lithos_lens.telemetry.setup_telemetry"
       },
       "Web": {
-        "functions_over_10": 9,
+        "functions_over_10": 10,
         "max_complexity": 18,
         "max_function": "lithos_lens.knowledge_routes.register_knowledge_routes.knowledge"
       },
@@ -74,7 +74,7 @@
       "over_75": 49,
       "p90": 45
     },
-    "functions_over_10": 65,
+    "functions_over_10": 66,
     "max": 43,
     "median": 2,
     "p90": 8,
@@ -130,7 +130,7 @@
         "qualname": "lithos_lens.task_filtering.matches_filters"
       }
     ],
-    "total_functions": 1233
+    "total_functions": 1264
   },
   "components": {
     "Config": {
@@ -179,7 +179,9 @@
         "lithos_lens.knowledge_graph_expansion",
         "lithos_lens.knowledge_graph_view",
         "lithos_lens.knowledge_graph_panels",
-        "lithos_lens.knowledge_graph_picker"
+        "lithos_lens.knowledge_graph_picker",
+        "lithos_lens.note_feedback",
+        "lithos_lens.note_writes"
       ],
       "tier": "Foundation"
     },
@@ -191,6 +193,7 @@
         "lithos_lens.mcp_transport",
         "lithos_lens.fake_lithos",
         "lithos_lens.fake_writes",
+        "lithos_lens.fake_note_writes",
         "lithos_lens.fake_store",
         "lithos_lens.fake_dataset",
         "lithos_lens.fake_graph_dataset",
@@ -274,7 +277,9 @@
         "lithos_lens.gate_override",
         "lithos_lens.cancel_routes",
         "lithos_lens.create_routes",
-        "lithos_lens.edge_routes"
+        "lithos_lens.edge_routes",
+        "lithos_lens.write_audit",
+        "lithos_lens.feedback_routes"
       ],
       "tier": "Entrypoints"
     },
@@ -292,8 +297,8 @@
     }
   },
   "domain": {
-    "associations": 174,
-    "models": 152,
+    "associations": 175,
+    "models": 155,
     "models_without_docstrings": 16,
     "relationships": [
       {
@@ -1329,6 +1334,12 @@
         "target": "EdgeFacts"
       },
       {
+        "cardinality": "0..1",
+        "field": "feedback",
+        "source": "WriteReceipt",
+        "target": "FeedbackFacts"
+      },
+      {
         "cardinality": "0..*",
         "field": "released",
         "source": "WriteReceipt",
@@ -2056,6 +2067,7 @@
         "namespace": "str",
         "note_type": "str",
         "status": "str",
+        "tags": "tuple[str, ...]",
         "title": "str"
       }
     },
@@ -2386,6 +2398,24 @@
         "success": "bool"
       }
     },
+    "lithos_lens.note_feedback.ProfileFeedback": {
+      "fields": {
+        "accepted": "bool",
+        "profile": "str",
+        "rejected": "bool"
+      }
+    },
+    "lithos_lens.note_writes.NoteUpdateResult": {
+      "fields": {
+        "current_version": "int | None",
+        "message": "str",
+        "note_id": "str",
+        "path": "str",
+        "status": "str",
+        "title": "str",
+        "version": "int | None"
+      }
+    },
     "lithos_lens.operator.IdentityCheck": {
       "fields": {
         "code": "str",
@@ -2443,6 +2473,14 @@
         "target": "ReceiptTask"
       }
     },
+    "lithos_lens.receipts.FeedbackFacts": {
+      "fields": {
+        "profile": "str",
+        "retried": "bool",
+        "unchanged": "bool",
+        "verdict": "str"
+      }
+    },
     "lithos_lens.receipts.ReceiptTask": {
       "fields": {
         "task_id": "str",
@@ -2457,6 +2495,7 @@
         "checked_status": "str",
         "created": "CreateFacts | None",
         "edge": "EdgeFacts | None",
+        "feedback": "FeedbackFacts | None",
         "operator": "str",
         "outcome": "str",
         "prior_status": "str",
@@ -4662,7 +4701,7 @@
     },
     "lithos_lens.fake_lithos.FakeLithosClient.__init__": {
       "complexity": 2,
-      "length": 37,
+      "length": 40,
       "module": "lithos_lens.fake_lithos",
       "path": "src/lithos_lens/fake_lithos.py",
       "paths": [
@@ -5020,6 +5059,51 @@
         "src/lithos_lens/fake_lithos.py"
       ]
     },
+    "lithos_lens.fake_note_writes.FakeNoteWrites._patch": {
+      "complexity": 2,
+      "length": 9,
+      "module": "lithos_lens.fake_note_writes",
+      "path": "src/lithos_lens/fake_note_writes.py",
+      "paths": [
+        "src/lithos_lens/fake_note_writes.py"
+      ]
+    },
+    "lithos_lens.fake_note_writes.FakeNoteWrites._path": {
+      "complexity": 3,
+      "length": 10,
+      "module": "lithos_lens.fake_note_writes",
+      "path": "src/lithos_lens/fake_note_writes.py",
+      "paths": [
+        "src/lithos_lens/fake_note_writes.py"
+      ]
+    },
+    "lithos_lens.fake_note_writes.FakeNoteWrites._publish": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos_lens.fake_note_writes",
+      "path": "src/lithos_lens/fake_note_writes.py",
+      "paths": [
+        "src/lithos_lens/fake_note_writes.py"
+      ]
+    },
+    "lithos_lens.fake_note_writes.FakeNoteWrites.effective_notes": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos_lens.fake_note_writes",
+      "path": "src/lithos_lens/fake_note_writes.py",
+      "paths": [
+        "src/lithos_lens/fake_note_writes.py"
+      ]
+    },
+    "lithos_lens.fake_note_writes.FakeNoteWrites.note_update": {
+      "complexity": 4,
+      "length": 51,
+      "module": "lithos_lens.fake_note_writes",
+      "path": "src/lithos_lens/fake_note_writes.py",
+      "paths": [
+        "src/lithos_lens/fake_note_writes.py"
+      ]
+    },
     "lithos_lens.fake_store.FakeStoreView.__init__": {
       "complexity": 4,
       "length": 21,
@@ -5360,6 +5444,114 @@
       "path": "src/lithos_lens/fake_writes.py",
       "paths": [
         "src/lithos_lens/fake_writes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes._failed": {
+      "complexity": 6,
+      "length": 43,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes._note_gone": {
+      "complexity": 1,
+      "length": 10,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes._note_path": {
+      "complexity": 1,
+      "length": 2,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes._patch_once": {
+      "complexity": 12,
+      "length": 70,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes._read": {
+      "complexity": 5,
+      "length": 23,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes._subject": {
+      "complexity": 3,
+      "length": 5,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes._version_of": {
+      "complexity": 3,
+      "length": 5,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes.feedback_write": {
+      "complexity": 1,
+      "length": 55,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes.feedback_write.perform": {
+      "complexity": 7,
+      "length": 42,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes.note_feedback_path": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes.register_feedback_routes": {
+      "complexity": 1,
+      "length": 35,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
+      ]
+    },
+    "lithos_lens.feedback_routes.register_feedback_routes.post_feedback": {
+      "complexity": 4,
+      "length": 21,
+      "module": "lithos_lens.feedback_routes",
+      "path": "src/lithos_lens/feedback_routes.py",
+      "paths": [
+        "src/lithos_lens/feedback_routes.py"
       ]
     },
     "lithos_lens.filter_options.build_filter_options": {
@@ -8577,7 +8769,7 @@
     },
     "lithos_lens.knowledge_facts.note_facts": {
       "complexity": 1,
-      "length": 11,
+      "length": 12,
       "module": "lithos_lens.knowledge_facts",
       "path": "src/lithos_lens/knowledge_facts.py",
       "paths": [
@@ -10717,6 +10909,15 @@
         "src/lithos_lens/lithos_writes.py"
       ]
     },
+    "lithos_lens.lithos_writes.LithosWriteMethods.note_update": {
+      "complexity": 1,
+      "length": 22,
+      "module": "lithos_lens.lithos_writes",
+      "path": "src/lithos_lens/lithos_writes.py",
+      "paths": [
+        "src/lithos_lens/lithos_writes.py"
+      ]
+    },
     "lithos_lens.lithos_writes.LithosWriteMethods.task_cancel": {
       "complexity": 1,
       "length": 10,
@@ -10756,6 +10957,15 @@
     "lithos_lens.lithos_writes.LithosWriteMethods.task_reopen": {
       "complexity": 1,
       "length": 9,
+      "module": "lithos_lens.lithos_writes",
+      "path": "src/lithos_lens/lithos_writes.py",
+      "paths": [
+        "src/lithos_lens/lithos_writes.py"
+      ]
+    },
+    "lithos_lens.lithos_writes.LithosWriteProtocol.note_update": {
+      "complexity": 1,
+      "length": 8,
       "module": "lithos_lens.lithos_writes",
       "path": "src/lithos_lens/lithos_writes.py",
       "paths": [
@@ -11318,6 +11528,105 @@
       "path": "src/lithos_lens/normalizers.py",
       "paths": [
         "src/lithos_lens/normalizers.py"
+      ]
+    },
+    "lithos_lens.note_feedback.ProfileFeedback.pressed": {
+      "complexity": 2,
+      "length": 2,
+      "module": "lithos_lens.note_feedback",
+      "path": "src/lithos_lens/note_feedback.py",
+      "paths": [
+        "src/lithos_lens/note_feedback.py"
+      ]
+    },
+    "lithos_lens.note_feedback.apply_verdict": {
+      "complexity": 4,
+      "length": 14,
+      "module": "lithos_lens.note_feedback",
+      "path": "src/lithos_lens/note_feedback.py",
+      "paths": [
+        "src/lithos_lens/note_feedback.py"
+      ]
+    },
+    "lithos_lens.note_feedback.is_verdict": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos_lens.note_feedback",
+      "path": "src/lithos_lens/note_feedback.py",
+      "paths": [
+        "src/lithos_lens/note_feedback.py"
+      ]
+    },
+    "lithos_lens.note_feedback.note_feedback": {
+      "complexity": 2,
+      "length": 15,
+      "module": "lithos_lens.note_feedback",
+      "path": "src/lithos_lens/note_feedback.py",
+      "paths": [
+        "src/lithos_lens/note_feedback.py"
+      ]
+    },
+    "lithos_lens.note_feedback.note_profiles": {
+      "complexity": 4,
+      "length": 13,
+      "module": "lithos_lens.note_feedback",
+      "path": "src/lithos_lens/note_feedback.py",
+      "paths": [
+        "src/lithos_lens/note_feedback.py"
+      ]
+    },
+    "lithos_lens.note_feedback.verdict_tag": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos_lens.note_feedback",
+      "path": "src/lithos_lens/note_feedback.py",
+      "paths": [
+        "src/lithos_lens/note_feedback.py"
+      ]
+    },
+    "lithos_lens.note_writes.NoteUpdateResult.conflicted": {
+      "complexity": 1,
+      "length": 2,
+      "module": "lithos_lens.note_writes",
+      "path": "src/lithos_lens/note_writes.py",
+      "paths": [
+        "src/lithos_lens/note_writes.py"
+      ]
+    },
+    "lithos_lens.note_writes.NoteUpdateResult.updated": {
+      "complexity": 1,
+      "length": 2,
+      "module": "lithos_lens.note_writes",
+      "path": "src/lithos_lens/note_writes.py",
+      "paths": [
+        "src/lithos_lens/note_writes.py"
+      ]
+    },
+    "lithos_lens.note_writes._version": {
+      "complexity": 3,
+      "length": 3,
+      "module": "lithos_lens.note_writes",
+      "path": "src/lithos_lens/note_writes.py",
+      "paths": [
+        "src/lithos_lens/note_writes.py"
+      ]
+    },
+    "lithos_lens.note_writes.normalize_note_update": {
+      "complexity": 6,
+      "length": 11,
+      "module": "lithos_lens.note_writes",
+      "path": "src/lithos_lens/note_writes.py",
+      "paths": [
+        "src/lithos_lens/note_writes.py"
+      ]
+    },
+    "lithos_lens.note_writes.note_update_arguments": {
+      "complexity": 1,
+      "length": 14,
+      "module": "lithos_lens.note_writes",
+      "path": "src/lithos_lens/note_writes.py",
+      "paths": [
+        "src/lithos_lens/note_writes.py"
       ]
     },
     "lithos_lens.operator.OperatorIdentity.resolved": {
@@ -13147,6 +13456,15 @@
         "src/lithos_lens/web.py"
       ]
     },
+    "lithos_lens.write_audit.record_attempt": {
+      "complexity": 4,
+      "length": 31,
+      "module": "lithos_lens.write_audit",
+      "path": "src/lithos_lens/write_audit.py",
+      "paths": [
+        "src/lithos_lens/write_audit.py"
+      ]
+    },
     "lithos_lens.write_errors.TaskRef.label": {
       "complexity": 2,
       "length": 3,
@@ -13454,8 +13772,17 @@
       ]
     },
     "lithos_lens.write_funnel.WriteFunnel._attempt": {
-      "complexity": 17,
-      "length": 108,
+      "complexity": 18,
+      "length": 114,
+      "module": "lithos_lens.write_funnel",
+      "path": "src/lithos_lens/write_funnel.py",
+      "paths": [
+        "src/lithos_lens/write_funnel.py"
+      ]
+    },
+    "lithos_lens.write_funnel.WriteFunnel._attempt_note": {
+      "complexity": 3,
+      "length": 13,
       "module": "lithos_lens.write_funnel",
       "path": "src/lithos_lens/write_funnel.py",
       "paths": [
@@ -13482,7 +13809,7 @@
     },
     "lithos_lens.write_funnel.WriteFunnel._mint": {
       "complexity": 4,
-      "length": 40,
+      "length": 41,
       "module": "lithos_lens.write_funnel",
       "path": "src/lithos_lens/write_funnel.py",
       "paths": [
@@ -13517,8 +13844,8 @@
       ]
     },
     "lithos_lens.write_funnel.WriteFunnel._run": {
-      "complexity": 9,
-      "length": 65,
+      "complexity": 10,
+      "length": 71,
       "module": "lithos_lens.write_funnel",
       "path": "src/lithos_lens/write_funnel.py",
       "paths": [
@@ -13545,7 +13872,7 @@
     },
     "lithos_lens.write_funnel.WriteFunnel.submit_create": {
       "complexity": 1,
-      "length": 14,
+      "length": 16,
       "module": "lithos_lens.write_funnel",
       "path": "src/lithos_lens/write_funnel.py",
       "paths": [
@@ -13573,15 +13900,6 @@
     "lithos_lens.write_funnel._no_confirmation": {
       "complexity": 1,
       "length": 2,
-      "module": "lithos_lens.write_funnel",
-      "path": "src/lithos_lens/write_funnel.py",
-      "paths": [
-        "src/lithos_lens/write_funnel.py"
-      ]
-    },
-    "lithos_lens.write_funnel._record": {
-      "complexity": 4,
-      "length": 31,
       "module": "lithos_lens.write_funnel",
       "path": "src/lithos_lens/write_funnel.py",
       "paths": [
@@ -13788,7 +14106,7 @@
     },
     "lithos_lens.write_routes.register_write_routes": {
       "complexity": 1,
-      "length": 295,
+      "length": 297,
       "module": "lithos_lens.write_routes",
       "path": "src/lithos_lens/write_routes.py",
       "paths": [
@@ -13965,7 +14283,7 @@
       }
     },
     "cross_component_edges": 41,
-    "cross_component_module_edges": 219,
+    "cross_component_module_edges": 230,
     "edges": [
       {
         "imports": [
@@ -14112,10 +14430,12 @@
           "lithos_lens.fake_lithos -> lithos_lens.knowledge_edges",
           "lithos_lens.fake_lithos -> lithos_lens.knowledge_search",
           "lithos_lens.fake_lithos -> lithos_lens.knowledge_tags",
+          "lithos_lens.fake_note_writes -> lithos_lens.note_writes",
           "lithos_lens.lithos_client -> lithos_lens.knowledge",
           "lithos_lens.lithos_client -> lithos_lens.knowledge_search",
           "lithos_lens.lithos_client -> lithos_lens.knowledge_tags",
-          "lithos_lens.lithos_graph_reads -> lithos_lens.knowledge_edges"
+          "lithos_lens.lithos_graph_reads -> lithos_lens.knowledge_edges",
+          "lithos_lens.lithos_writes -> lithos_lens.note_writes"
         ],
         "source": "LithosClient",
         "target": "Knowledge"
@@ -14140,6 +14460,7 @@
           "lithos_lens.fake_knowledge_dataset -> lithos_lens.tasks",
           "lithos_lens.fake_lithos -> lithos_lens.task_writes",
           "lithos_lens.fake_lithos -> lithos_lens.tasks",
+          "lithos_lens.fake_note_writes -> lithos_lens.tasks",
           "lithos_lens.fake_store -> lithos_lens.tasks",
           "lithos_lens.fake_writes -> lithos_lens.tasks",
           "lithos_lens.lithos_client -> lithos_lens.normalizers",
@@ -14283,6 +14604,8 @@
       },
       {
         "imports": [
+          "lithos_lens.feedback_routes -> lithos_lens.knowledge_facts",
+          "lithos_lens.feedback_routes -> lithos_lens.note_feedback",
           "lithos_lens.knowledge_graph_routes -> lithos_lens.knowledge_edge_types",
           "lithos_lens.knowledge_graph_routes -> lithos_lens.knowledge_facts",
           "lithos_lens.knowledge_graph_routes -> lithos_lens.knowledge_graph",
@@ -14307,6 +14630,7 @@
         "imports": [
           "lithos_lens.cancel_routes -> lithos_lens.lithos_client",
           "lithos_lens.edge_routes -> lithos_lens.lithos_client",
+          "lithos_lens.feedback_routes -> lithos_lens.lithos_client",
           "lithos_lens.gate_override -> lithos_lens.lithos_client",
           "lithos_lens.knowledge_routes -> lithos_lens.lithos_client",
           "lithos_lens.web -> lithos_lens.fake_lithos",
@@ -14323,6 +14647,7 @@
           "lithos_lens.cancel_routes -> lithos_lens.state",
           "lithos_lens.create_routes -> lithos_lens.state",
           "lithos_lens.edge_routes -> lithos_lens.state",
+          "lithos_lens.feedback_routes -> lithos_lens.state",
           "lithos_lens.graph_routes -> lithos_lens.state",
           "lithos_lens.knowledge_graph_routes -> lithos_lens.state",
           "lithos_lens.knowledge_routes -> lithos_lens.state",
@@ -14364,6 +14689,7 @@
           "lithos_lens.create_routes -> lithos_lens.task_filtering",
           "lithos_lens.create_routes -> lithos_lens.tasks",
           "lithos_lens.edge_routes -> lithos_lens.tasks",
+          "lithos_lens.feedback_routes -> lithos_lens.tasks",
           "lithos_lens.gate_override -> lithos_lens.tasks",
           "lithos_lens.graph_routes -> lithos_lens.tasks",
           "lithos_lens.knowledge_routes -> lithos_lens.template_vocabulary",
@@ -14389,7 +14715,7 @@
           "lithos_lens.knowledge_routes -> lithos_lens.telemetry",
           "lithos_lens.web -> lithos_lens.metrics",
           "lithos_lens.web -> lithos_lens.telemetry",
-          "lithos_lens.write_funnel -> lithos_lens.metrics",
+          "lithos_lens.write_audit -> lithos_lens.metrics",
           "lithos_lens.write_funnel -> lithos_lens.telemetry"
         ],
         "source": "Web",
@@ -14408,7 +14734,10 @@
           "lithos_lens.edge_routes -> lithos_lens.receipts",
           "lithos_lens.edge_routes -> lithos_lens.write_errors",
           "lithos_lens.edge_routes -> lithos_lens.write_guards",
+          "lithos_lens.feedback_routes -> lithos_lens.receipts",
+          "lithos_lens.feedback_routes -> lithos_lens.write_errors",
           "lithos_lens.knowledge_routes -> lithos_lens.write_guards",
+          "lithos_lens.write_audit -> lithos_lens.write_errors",
           "lithos_lens.write_funnel -> lithos_lens.create_coordinator",
           "lithos_lens.write_funnel -> lithos_lens.create_form",
           "lithos_lens.write_funnel -> lithos_lens.operator",
@@ -14464,7 +14793,7 @@
       "seams": "measured",
       "structure": "measured"
     },
-    "config_hash": "910cc7609c4b547bba4e82658ff844e1f9509db88b6dcbd215d423f8212c8e25",
+    "config_hash": "4889f449570919882af79817d3e4038aa41453093fcf4b37f8086f7dc61aaa59",
     "definitions": {
       "complexity": 1,
       "structure": 1,
@@ -14481,11 +14810,13 @@
           "lithos_lens.errors",
           "lithos_lens.fake_lithos",
           "lithos_lens.fake_writes",
+          "lithos_lens.fake_note_writes",
           "lithos_lens.fake_store",
           "lithos_lens.fake_dataset",
           "lithos_lens.fake_graph_dataset",
           "lithos_lens.fake_knowledge_dataset",
           "lithos_lens.write_funnel",
+          "lithos_lens.write_audit",
           "lithos_lens.cancel_routes",
           "lithos_lens.create_routes",
           "lithos_lens.knowledge_routes",
@@ -14542,7 +14873,9 @@
           "lithos_lens.receipts",
           "lithos_lens.gate_override",
           "lithos_lens.create_form",
-          "lithos_lens.create_coordinator"
+          "lithos_lens.create_coordinator",
+          "lithos_lens.note_writes",
+          "lithos_lens.note_feedback"
         ]
       },
       "excluded": [
@@ -14562,7 +14895,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "b5b2e4d9ab96c860d8d4e2ba0f459e76513acae8af0579906e785002ae4fa70e",
+    "source_hash": "b5dc40558133e89976a104917fe2d9e570a4cdea667ecc6f480ea0180737bd44",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -14764,10 +15097,18 @@
     "lithos_lens.fake_lithos": {
       "component": "LithosClient",
       "functions": 42,
-      "lines": 794,
+      "lines": 798,
       "max_complexity": 20,
       "path": "src/lithos_lens/fake_lithos.py",
-      "sloc": 648
+      "sloc": 651
+    },
+    "lithos_lens.fake_note_writes": {
+      "component": "LithosClient",
+      "functions": 5,
+      "lines": 126,
+      "max_complexity": 4,
+      "path": "src/lithos_lens/fake_note_writes.py",
+      "sloc": 110
     },
     "lithos_lens.fake_store": {
       "component": "LithosClient",
@@ -14784,6 +15125,14 @@
       "max_complexity": 21,
       "path": "src/lithos_lens/fake_writes.py",
       "sloc": 553
+    },
+    "lithos_lens.feedback_routes": {
+      "component": "Web",
+      "functions": 12,
+      "lines": 380,
+      "max_complexity": 12,
+      "path": "src/lithos_lens/feedback_routes.py",
+      "sloc": 326
     },
     "lithos_lens.filter_options": {
       "component": "Tasks",
@@ -14980,10 +15329,10 @@
     "lithos_lens.knowledge_facts": {
       "component": "Knowledge",
       "functions": 14,
-      "lines": 367,
+      "lines": 371,
       "max_complexity": 18,
       "path": "src/lithos_lens/knowledge_facts.py",
-      "sloc": 287
+      "sloc": 291
     },
     "lithos_lens.knowledge_graph": {
       "component": "Knowledge",
@@ -15115,11 +15464,11 @@
     },
     "lithos_lens.lithos_writes": {
       "component": "LithosClient",
-      "functions": 11,
-      "lines": 155,
+      "functions": 13,
+      "lines": 190,
       "max_complexity": 1,
       "path": "src/lithos_lens/lithos_writes.py",
-      "sloc": 135
+      "sloc": 166
     },
     "lithos_lens.logging": {
       "component": "Logging",
@@ -15161,6 +15510,22 @@
       "path": "src/lithos_lens/normalizers.py",
       "sloc": 104
     },
+    "lithos_lens.note_feedback": {
+      "component": "Knowledge",
+      "functions": 6,
+      "lines": 122,
+      "max_complexity": 4,
+      "path": "src/lithos_lens/note_feedback.py",
+      "sloc": 94
+    },
+    "lithos_lens.note_writes": {
+      "component": "Knowledge",
+      "functions": 5,
+      "lines": 98,
+      "max_complexity": 6,
+      "path": "src/lithos_lens/note_writes.py",
+      "sloc": 76
+    },
     "lithos_lens.operator": {
       "component": "Writes",
       "functions": 9,
@@ -15180,10 +15545,10 @@
     "lithos_lens.receipts": {
       "component": "Writes",
       "functions": 11,
-      "lines": 305,
+      "lines": 325,
       "max_complexity": 3,
       "path": "src/lithos_lens/receipts.py",
-      "sloc": 236
+      "sloc": 252
     },
     "lithos_lens.relation_sentences": {
       "component": "TaskGraph",
@@ -15281,6 +15646,14 @@
       "path": "src/lithos_lens/web.py",
       "sloc": 576
     },
+    "lithos_lens.write_audit": {
+      "component": "Web",
+      "functions": 1,
+      "lines": 96,
+      "max_complexity": 4,
+      "path": "src/lithos_lens/write_audit.py",
+      "sloc": 73
+    },
     "lithos_lens.write_errors": {
       "component": "Writes",
       "functions": 33,
@@ -15292,10 +15665,10 @@
     "lithos_lens.write_funnel": {
       "component": "Web",
       "functions": 18,
-      "lines": 880,
-      "max_complexity": 17,
+      "lines": 879,
+      "max_complexity": 18,
       "path": "src/lithos_lens/write_funnel.py",
-      "sloc": 731
+      "sloc": 736
     },
     "lithos_lens.write_guards": {
       "component": "Writes",
@@ -15308,10 +15681,10 @@
     "lithos_lens.write_routes": {
       "component": "Web",
       "functions": 27,
-      "lines": 668,
+      "lines": 673,
       "max_complexity": 8,
       "path": "src/lithos_lens/write_routes.py",
-      "sloc": 547
+      "sloc": 551
     }
   },
   "quality": {
@@ -15328,7 +15701,7 @@
       "component_cycles": 0,
       "cross_component_edges": 41,
       "cross_module_private_refs": 0,
-      "max_module_lines": 880,
+      "max_module_lines": 879,
       "module_cycles": 0,
       "modules_over_800_lines": 4,
       "tests_private_imports": 0
@@ -15414,24 +15787,24 @@
         "sloc": 587
       },
       "Knowledge": {
-        "classes": 60,
-        "functions": 231,
+        "classes": 62,
+        "functions": 242,
         "largest_module": "lithos_lens.knowledge",
         "largest_module_lines": 799,
-        "lines": 5447,
-        "modules": 17,
-        "public_symbols": 125,
-        "sloc": 4306
+        "lines": 5671,
+        "modules": 19,
+        "public_symbols": 134,
+        "sloc": 4480
       },
       "LithosClient": {
-        "classes": 17,
-        "functions": 171,
+        "classes": 18,
+        "functions": 178,
         "largest_module": "lithos_lens.fake_lithos",
-        "largest_module_lines": 794,
-        "lines": 5109,
-        "modules": 10,
-        "public_symbols": 27,
-        "sloc": 4143
+        "largest_module_lines": 798,
+        "lines": 5274,
+        "modules": 11,
+        "public_symbols": 28,
+        "sloc": 4287
       },
       "Logging": {
         "classes": 2,
@@ -15484,41 +15857,41 @@
         "sloc": 914
       },
       "Web": {
-        "classes": 15,
-        "functions": 197,
+        "classes": 17,
+        "functions": 210,
         "largest_module": "lithos_lens.write_funnel",
-        "largest_module_lines": 880,
-        "lines": 6226,
-        "modules": 12,
-        "public_symbols": 82,
-        "sloc": 5048
+        "largest_module_lines": 879,
+        "lines": 6706,
+        "modules": 14,
+        "public_symbols": 88,
+        "sloc": 5456
       },
       "Writes": {
-        "classes": 25,
+        "classes": 26,
         "functions": 83,
         "largest_module": "lithos_lens.write_errors",
         "largest_module_lines": 825,
-        "lines": 2272,
+        "lines": 2292,
         "modules": 7,
-        "public_symbols": 42,
-        "sloc": 1659
+        "public_symbols": 43,
+        "sloc": 1675
       }
     },
     "max_module": "lithos_lens.write_funnel",
-    "max_module_lines": 880,
+    "max_module_lines": 879,
     "modules_over_800": [
       "lithos_lens.graph_layout",
       "lithos_lens.tasks",
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 37401,
-    "total_modules": 93,
-    "total_sloc": 29168
+    "total_lines": 38290,
+    "total_modules": 98,
+    "total_sloc": 29910
   },
   "tests": {
-    "ratio": 2.04,
-    "src_lines": 37401,
-    "test_lines": 76368
+    "ratio": 2.02,
+    "src_lines": 38290,
+    "test_lines": 77194
   }
 }

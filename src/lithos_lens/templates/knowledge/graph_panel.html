@@ -61,6 +61,13 @@
     <p class="eyebrow">Node</p>
     <h2 tabindex="-1" data-kgraph-panel-heading>{{ node_ref(node) }}</h2>
     {{ node_facts(node, panel.meta) }}
+    {#- 👎 for each profile the note was ingested for (K4, §10.3), from the
+        tags its facts were read with; the 303 comes back to this panel. -#}
+    {% if node.facts is not none and not node.is_ghost %}
+      {% with feedback_note_id = node.id, feedback_tags = node.facts.tags, feedback_verdicts = note_verdicts, feedback_next = knowledge_graph_url(params, selected=node.id) %}
+        {% include "writes/feedback_action.html" %}
+      {% endwith %}
+    {% endif %}
     <p data-kgraph-degree>Degree in this view: {{ node.degree }}</p>
     {#- D16, focus mode only, from the server's eligibility: the focus has
         neither action; an expanded note collapses; any other note shows its

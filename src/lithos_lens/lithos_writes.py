@@ -1,4 +1,7 @@
-"""The five Lithos task-write methods, on the protocol and on the real client.
+"""The Lithos write methods, on the protocol and on the real client.
+
+The five task writes, plus the one note write (``lithos_note_update``, K4's
+relevance feedback — a tag patch, never the body).
 
 The same shape as every read in :mod:`lithos_lens.lithos_client` — build the
 arguments, place the call, raise on the error envelope, normalize the payload —
@@ -20,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from lithos_lens import task_writes
+from lithos_lens import note_writes, task_writes
 from lithos_lens.mcp_transport import raise_for_error
 
 
@@ -62,9 +65,18 @@ class LithosWriteProtocol(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> task_writes.TaskEdgeUpsertResult: ...
 
+    async def note_update(
+        self,
+        note_id: str,
+        *,
+        agent: str,
+        tags: tuple[str, ...] | list[str],
+        expected_version: int,
+    ) -> note_writes.NoteUpdateResult: ...
+
 
 class LithosWriteMethods:
-    """The five writes, placed through the host client's ``_call_tool``."""
+    """The writes, placed through the host client's ``_call_tool``."""
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Overridden by ``LithosClient``, which places the call on its transport."""
@@ -153,3 +165,26 @@ class LithosWriteMethods:
         )
         raise_for_error(payload)
         return task_writes.normalize_task_edge_upsert(payload)
+
+    async def note_update(
+        self,
+        note_id: str,
+        *,
+        agent: str,
+        tags: tuple[str, ...] | list[str],
+        expected_version: int,
+    ) -> note_writes.NoteUpdateResult:
+        """Replace a note's tags, if it is still at ``expected_version``.
+
+        A stale version is an ANSWER (``version_conflict``), not an error, so
+        it is returned for the caller to re-read and retry; only an error
+        envelope raises.
+        """
+        payload = await self._call_tool(
+            "lithos_note_update",
+            note_writes.note_update_arguments(
+                note_id, agent=agent, tags=tags, expected_version=expected_version
+            ),
+        )
+        raise_for_error(payload)
+        return note_writes.normalize_note_update(payload)

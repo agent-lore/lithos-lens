@@ -3,7 +3,7 @@
 
 # LithosClient
 
-Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it (with the task writes and the knowledge-graph reads mixed in) plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary.
+Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it (with the task writes and the knowledge-graph reads mixed in) plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary, plus the note tag patch over a per-instance note overlay.
 
 **Tier:** Core
 
@@ -15,6 +15,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 | `lithos_lens.fake_graph_dataset` | M | 1 | 2 |
 | `lithos_lens.fake_knowledge_dataset` | M | 0 | 3 |
 | `lithos_lens.fake_lithos` | L | 2 | 1 |
+| `lithos_lens.fake_note_writes` | S | 1 | 0 |
 | `lithos_lens.fake_store` | M | 2 | 0 |
 | `lithos_lens.fake_writes` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | L | 3 | 0 |
@@ -43,6 +44,9 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 - class `FakeEventHub` — Hermetic in-process event hub for fake-Lithos app mode.
 - class `FakeLithosClient` — A protocol-complete Lithos client over an in-memory store.
 
+### `lithos_lens.fake_note_writes`
+- class `FakeNoteWrites` — ``note_update`` and the note overlay it writes into.
+
 ### `lithos_lens.fake_store`
 - class `FakeWriteOverlay` — Everything a fake's writes changed, keyed by what they changed it on.
 - class `FakeStoreView` — Seed plus overlay: the effective task store a fake's reads answer from.
@@ -63,7 +67,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 
 ### `lithos_lens.lithos_writes`
 - class `LithosWriteProtocol` — The writes (T3): called only by the write funnel, never by a read path.
-- class `LithosWriteMethods` — The five writes, placed through the host client's ``_call_tool``.
+- class `LithosWriteMethods` — The writes, placed through the host client's ``_call_tool``.
 
 ### `lithos_lens.mcp_transport`
 - class `LithosToolError` — Raised when Lithos returns an error envelope from a tool call.

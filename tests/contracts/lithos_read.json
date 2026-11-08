@@ -16,9 +16,14 @@
         "path": "plans/influx-migration.md",
         "agent_id": "lithos-lens",
         "max_length": 1
+      },
+      "by_id_truncated": {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "agent_id": "lithos-lens",
+        "max_length": 1
       }
     },
-    "notes": "Exactly one of id/path; agent_id is audit identity; max_length truncates content but frontmatter-derived fields stay complete. metadata carries the frontmatter dict plus source_url, derived_from_ids, and free-form extra."
+    "notes": "Exactly one of id/path; agent_id is audit identity; max_length truncates content but frontmatter-derived fields stay complete. metadata carries the frontmatter dict plus source_url, derived_from_ids, and free-form extra. The `by_id_truncated` variant is the feedback write's pre-check (REQUIREMENTS §10.2): `max_length=1` for the current tags and `metadata.version` without the body."
   },
   "responses": {
     "success": {

@@ -32,6 +32,12 @@ order, with one shape:
     the same way, an attempt that still needs its confirmation, which is sent
     to the confirm page.
 
+A note has no status, so a note action (K4's relevance feedback) is a
+:class:`NoteWrite`: the same steps 1, 2, 4 and 8-10, with the action's own
+pre-check keyed on the note's ``version`` in place of steps 3 and 5 — it reads
+the note, writes with that version as ``expected_version``, and re-reads and
+retries once on ``version_conflict``.
+
 A create has no task to pre-check, so it enters through
 :meth:`WriteFunnel.submit_create` (T3-W7): the same Origin check, operator,
 registration, record and receipt, with Lens's form validation in place of the
@@ -56,14 +62,12 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from opentelemetry.trace import Span
 
-from lithos_lens import metrics
 from lithos_lens.create_coordinator import (
     CreateCoordinator,
     Created,
@@ -91,6 +95,7 @@ from lithos_lens.receipts import (
     CancelFacts,
     CreateFacts,
     EdgeFacts,
+    FeedbackFacts,
     ReceiptStore,
     ReceiptTask,
     WriteReceipt,
@@ -99,6 +104,7 @@ from lithos_lens.receipts import (
 from lithos_lens.state import AppState
 from lithos_lens.tasks import TASK_STATUSES, TaskRecord, task_detail_path
 from lithos_lens.telemetry import get_tracer
+from lithos_lens.write_audit import AUDIT_EVENT, WriteLedger, record_attempt
 from lithos_lens.write_errors import (
     CONFLICT,
     CONFLICT_STATUS,
@@ -125,17 +131,13 @@ __all__ = [
     "INVALID_FORM",
     "RECONCILE_TRIGGER",
     "CreateWrite",
+    "NoteWrite",
     "TaskWrite",
     "WriteDone",
     "WriteForm",
     "WriteFunnel",
     "origin_refusal",
 ]
-
-#: The ``lens_event`` marker on the one structured audit line per attempt. The
-#: warnings the Origin check and the operator registry log beside it are
-#: diagnostics, not audit lines, and carry no such marker.
-AUDIT_EVENT = "lens.writes.audit"
 
 #: The event an HTMX write answer asks the page to fire. ``tasks.js`` listens
 #: for it on ``document`` and runs its immediate, coalesced reconcile — so the
@@ -154,11 +156,6 @@ OUTCOME_FRAGMENT = "writes/outcome.html"
 
 #: The fragment an HTMX POST is answered with when the write applied.
 RECEIPT_FRAGMENT = "writes/receipt.html"
-
-#: How each attempt ended, as the span and the counter spell it (§5C.6).
-WriteResult = Literal[
-    "ok", "conflict", "rejected", "unknown", "refused_origin", "no_operator"
-]
 
 #: The code an attempt is recorded with when it was sent to its action's
 #: confirm page rather than performed. Recorded as ``rejected``: nothing was
@@ -225,13 +222,16 @@ class WriteForm:
     ``expected_status`` and ``next_url`` are as submitted — the funnel judges
     both. ``arguments`` is the audit line's argument summary, built by the
     route because only it knows its fields: ids, types and LENGTHS, never free
-    text (a note is "note_chars: 41", not the note).
+    text (a note is "note_chars: 41", not the note). ``home`` is where the
+    operator returns when ``next_url`` names nowhere safe — the task's page
+    when empty; a note write's form names the note's.
     """
 
     task_id: str
     expected_status: str
     next_url: str = ""
     arguments: Mapping[str, Any] = field(default_factory=dict)
+    home: str = ""
 
 
 @dataclass(frozen=True)
@@ -244,7 +244,8 @@ class WriteDone:
     envelope (§5C.6): a success is recorded with what Lithos said, exactly
     as a refusal is. ``prior_status``, ``checked_status``, ``released_exact``,
     ``released_unread``, ``released_waiting``, a cancel's ``cancel`` facts and
-    an add-dependency's ``edge`` facts are carried to the receipt as they are (see
+    an add-dependency's ``edge`` facts and a note feedback's ``feedback`` facts
+    are carried to the receipt as they are (see
     :class:`~lithos_lens.receipts.WriteReceipt`).
     """
 
@@ -259,6 +260,7 @@ class WriteDone:
     released_waiting: bool = False
     cancel: CancelFacts | None = None
     edge: EdgeFacts | None = None
+    feedback: FeedbackFacts | None = None
 
 
 def _applies(task: TaskRecord) -> tuple[str, str] | None:
@@ -307,6 +309,23 @@ class TaskWrite:
     confirm_page: Callable[[TaskRecord], str] = _no_confirmation
 
 
+@dataclass(frozen=True)
+class NoteWrite:
+    """One action on an existing NOTE, as the funnel drives it (K4 feedback).
+
+    A note's pre-check is keyed on its ``version``, which only a read moments
+    before the write can supply, so ``perform`` holds the read AND the single
+    call (and its one retry on ``version_conflict``). It notes what it read on
+    the ``ledger`` and reports what it did, or answers why not in note copy.
+    """
+
+    action: WriteAction
+    perform: Callable[
+        [LithosClientProtocol, str, WriteLedger],
+        Awaitable[WriteDone | WriteProblem],
+    ]
+
+
 #: Re-renders the create form: the input as typed, the problem that stopped it
 #: (for the form-level notice), the per-field errors, and the status.
 RenderCreateForm = Callable[
@@ -331,22 +350,6 @@ class CreateWrite:
     render_form: RenderCreateForm
     render_unknown: Callable[[Request, CreateInput], Awaitable[Response]]
     return_to: str
-
-
-@dataclass
-class _Ledger:
-    """One attempt's audit fields, filled in as the funnel learns them."""
-
-    action: WriteAction
-    task_id: str
-    expected_status: str
-    arguments: Mapping[str, Any]
-    result: WriteResult = "unknown"
-    code: str = ""
-    operator: str = ""
-    observed_status: str = ""
-    envelope: Mapping[str, Any] = field(default_factory=dict)
-    attributes: dict[str, str | bool] = field(default_factory=dict)
 
 
 class WriteFunnel:
@@ -376,10 +379,10 @@ class WriteFunnel:
         self._operator_page_for = operator_page_for
 
     async def submit(
-        self, request: Request, form: WriteForm, write: TaskWrite
+        self, request: Request, form: WriteForm, write: TaskWrite | NoteWrite
     ) -> Response:
         """Run one attempt end to end and answer it. Always recorded once."""
-        ledger = _Ledger(
+        ledger = WriteLedger(
             action=write.action,
             task_id=form.task_id,
             expected_status=form.expected_status,
@@ -392,14 +395,20 @@ class WriteFunnel:
                 # In a `finally`, so an attempt that raised out of the funnel —
                 # a Lens defect — still leaves its line, with the result it had
                 # reached.
-                _record(span, ledger)
+                record_attempt(span, ledger)
 
     async def _run(
-        self, request: Request, form: WriteForm, write: TaskWrite, ledger: _Ledger
+        self,
+        request: Request,
+        form: WriteForm,
+        write: TaskWrite | NoteWrite,
+        ledger: WriteLedger,
     ) -> Response:
         """Steps 1, 2 and 10: who may act, and how the attempt is answered."""
         htmx = request.headers.get("hx-request") == "true"
-        back_to = safe_next(form.next_url, default=task_detail_path(form.task_id))
+        back_to = safe_next(
+            form.next_url, default=form.home or task_detail_path(form.task_id)
+        )
 
         refused = origin_refusal(request)
         if refused is not None:
@@ -461,12 +470,18 @@ class WriteFunnel:
         return RedirectResponse(receipt_url(back_to, receipt_id), status_code=303)
 
     async def _attempt(
-        self, form: WriteForm, write: TaskWrite, operator: str, ledger: _Ledger
+        self,
+        form: WriteForm,
+        write: TaskWrite | NoteWrite,
+        operator: str,
+        ledger: WriteLedger,
     ) -> WriteReceipt | WriteProblem | _Unconfirmed:
         """Steps 3-9, for an attempt with an operator: a receipt, or why not."""
         action = write.action
         client = self._state.lithos_client
         subject = TaskRef(task_id=form.task_id)
+        if isinstance(write, NoteWrite):
+            return await self._attempt_note(write, operator, ledger, subject)
 
         if form.expected_status not in TASK_STATUSES:
             return funnel_problem(
@@ -569,6 +584,20 @@ class WriteFunnel:
             ledger.attributes["already_exists"] = done.edge.already_exists
         return await self._mint(action, done, operator, client)
 
+    async def _attempt_note(
+        self, write: NoteWrite, operator: str, ledger: WriteLedger, subject: TaskRef
+    ) -> WriteReceipt | WriteProblem:
+        """Steps 4-9 for a note: the action's own read stands in for 3 and 5."""
+        unregistered = await self._register(write.action, operator, subject)
+        if unregistered is not None:
+            return unregistered
+        client = self._state.lithos_client
+        done = await write.perform(client, operator, ledger)
+        if isinstance(done, WriteProblem):
+            return done
+        ledger.envelope = done.answer
+        return await self._mint(write.action, done, operator, client)
+
     async def submit_create(self, request: Request, write: CreateWrite) -> Response:
         """Run one create attempt end to end and answer it (D1). Recorded once.
 
@@ -576,16 +605,18 @@ class WriteFunnel:
         §5C.6's pre-check does not apply (D15) — Lens's validation stands in
         its place, and the call goes through the coordinator.
         """
-        ledger = _Ledger(action="create", task_id="", expected_status="", arguments={})
+        ledger = WriteLedger(
+            action="create", task_id="", expected_status="", arguments={}
+        )
         ledger.attributes["request_id"] = write.typed.request_id
         with get_tracer().start_as_current_span("lens.writes.create") as span:
             try:
                 return await self._run_create(request, write, ledger)
             finally:
-                _record(span, ledger)
+                record_attempt(span, ledger)
 
     async def _run_create(
-        self, request: Request, write: CreateWrite, ledger: _Ledger
+        self, request: Request, write: CreateWrite, ledger: WriteLedger
     ) -> Response:
         typed = write.typed
         refused = origin_refusal(request)
@@ -747,7 +778,7 @@ class WriteFunnel:
         )
 
     def _refuse(
-        self, request: Request, ledger: _Ledger, problem: WriteProblem, htmx: bool
+        self, request: Request, ledger: WriteLedger, problem: WriteProblem, htmx: bool
     ) -> Response:
         """Record a write that did not apply, and answer it in the right mode."""
         if problem.kind == "unknown_outcome":
@@ -835,6 +866,7 @@ class WriteFunnel:
             released_waiting=done.released_waiting,
             cancel=done.cancel,
             edge=done.edge,
+            feedback=done.feedback,
         )
 
 
@@ -845,36 +877,3 @@ def _split(envelope: Mapping[str, Any]) -> bool:
     and only a fresh read can tell the operator which (``write_errors``).
     """
     return envelope.get("code") == "task_not_found"
-
-
-def _record(span: Span, ledger: _Ledger) -> None:
-    """One attempt's span attributes, counter increment and audit line.
-
-    The operator, the task and a refusal's code are span attributes and audit
-    fields, never metric labels (``metrics.writes``).
-    """
-    span.set_attribute("lens.write.action", ledger.action)
-    span.set_attribute("lens.write.result", ledger.result)
-    span.set_attribute("lens.write.task_id", ledger.task_id)
-    span.set_attribute("lens.write.operator", ledger.operator)
-    if ledger.code:
-        span.set_attribute("lens.write.code", ledger.code)
-    for key, value in ledger.attributes.items():
-        span.set_attribute(f"lens.write.{key}", value)
-    metrics.writes().add(1, {"action": ledger.action, "result": ledger.result})
-    logger.info(
-        "write attempt",
-        extra={
-            "lens_event": AUDIT_EVENT,
-            "operator": ledger.operator,
-            "action": ledger.action,
-            "task_id": ledger.task_id,
-            "arguments": dict(ledger.arguments),
-            "expected_status": ledger.expected_status,
-            "observed_status": ledger.observed_status,
-            "result": ledger.result,
-            "code": ledger.code,
-            "envelope": dict(ledger.envelope),
-            **{f"write_{key}": value for key, value in ledger.attributes.items()},
-        },
-    )

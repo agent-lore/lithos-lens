@@ -38,6 +38,7 @@ from lithos_lens import task_writes
 from lithos_lens.config import LithosConfig
 from lithos_lens.events import EventHub, normalize_lithos_event
 from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
+from lithos_lens.fake_note_writes import FakeNoteWrites
 from lithos_lens.fake_store import NON_WORKABLE_TASK_TYPES
 from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore, write_error
 from lithos_lens.knowledge import RelatedNeighborhood
@@ -161,7 +162,7 @@ class FakeEventHub(EventHub):
         await self._stop.wait()
 
 
-class FakeLithosClient:
+class FakeLithosClient(FakeNoteWrites):
     """A protocol-complete Lithos client over an in-memory store.
 
     Reads answer from ``dataset`` (the shipped
@@ -197,6 +198,9 @@ class FakeLithosClient:
         # `clock` is the timer-gate clock (see FakeStoreView.clock); the real
         # one unless a test injects its own.
         self._writes = FakeWriteStore(self.dataset, clock=clock)
+        # The note write's overlay and racing writers (`FakeNoteWrites`).
+        self.note_overlay = {}
+        self.pending_note_writes = []
         #: Every write ATTEMPTED on this fake, as ``(tool, arguments)`` in the
         #: shape the real client would have sent — refusals included, because a
         #: refused write is still a call the server received. The action slices
@@ -560,7 +564,7 @@ class FakeLithosClient:
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None
     ) -> NoteRecord | None:
-        note = self.dataset.notes.get(knowledge_id)
+        note = self.effective_notes().get(knowledge_id)
         if note is None:
             # Parity with the concrete client: upstream lithos_read answers a
             # missing doc with an error envelope code "doc_not_found", which
@@ -587,7 +591,7 @@ class FakeLithosClient:
         note_id = self.dataset.note_paths.get(path)
         if note_id is None:
             return None
-        return self.dataset.notes.get(note_id)
+        return self.effective_notes().get(note_id)
 
     async def list_notes(
         self,
@@ -613,7 +617,7 @@ class FakeLithosClient:
                 ),
                 tags=note.tags,
             )
-            for note in self.dataset.notes.values()
+            for note in self.effective_notes().values()
         ]
         if title_contains:
             needle = title_contains.lower()
@@ -664,7 +668,7 @@ class FakeLithosClient:
             note_id: path for path, note_id in self.dataset.note_paths.items()
         }
         results: list[SearchResult] = []
-        for note in self.dataset.notes.values():
+        for note in self.effective_notes().values():
             if tags and not all(tag in note.tags for tag in tags):
                 continue
             path = paths_by_id.get(note.id, "")
@@ -701,7 +705,7 @@ class FakeLithosClient:
         arguments: dict[str, Any] = {} if prefix is None else {"prefix": prefix}
         self._record("lithos_tags", arguments)
         counts: dict[str, int] = {}
-        for note in self.dataset.notes.values():
+        for note in self.effective_notes().values():
             for tag in note.tags:
                 counts[tag] = counts.get(tag, 0) + 1
         if prefix is not None:
@@ -751,7 +755,7 @@ class FakeLithosClient:
         neighborhood still gets an empty read (a document with no relations is
         a success upstream).
         """
-        if knowledge_id not in self.dataset.notes:
+        if knowledge_id not in self.effective_notes():
             raise LithosToolError(
                 f"Document not found: {knowledge_id}", code="doc_not_found"
             )

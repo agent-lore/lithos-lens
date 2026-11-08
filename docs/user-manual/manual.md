@@ -115,6 +115,8 @@ Each write action opens a confirmation page that states its consequences before 
 - **Check relation…** adds a dependency. Choose whether this task is blocked by, or blocks, another task, and give the other task's id (in full, or at least six characters). Lens shows the relation with both titles and what it means for readiness before anything is written.
 - **Proceed anyway…** on an open gate. The confirmation says what would otherwise resolve the gate (for example, a timer's due time) and which waiting tasks completing it releases. You can add a note; without one, the gate records that you completed it early via Lens. Choose **Complete anyway** or **Keep waiting**.
 
+One knowledge action needs no confirmation page, because it only tags a note: **👍 / 👎 relevance feedback** on notes Influx ingested. See [Knowledge](#knowledge).
+
 ![](screenshots/task-new.png)
 
 ---
@@ -127,7 +129,11 @@ Each write action opens a confirmation page that states its consequences before 
 
 1. Each result card shows the note's title, its chips (type, status, namespace, confidence), its path, a snippet of its text and when it was last updated. Archived notes say so in their status chip.
 2. Click a title to open the [note](#knowledge-notes); click **in graph** to open the [knowledge graph](#the-knowledge-graph) centred on that note.
-3. **Browse tags** opens `/knowledge/tags`, every tag in the knowledge base with how many notes carry it, most notes first. Type in **Filter tags** to narrow the list, or click a prefix such as `project:` or `source:` to show only the tags that start with it. Click a tag to list the notes carrying it.
+3. **Recent intake** rows that Influx ingested for a profile carry **👍** and **👎** buttons, one pair per profile, labelled with the profile's name. **👎** tells Influx the article is not interesting for that profile — Influx uses it as a negative example and does not re-add the note to the profile; **👍** records that it is interesting. Lens writes the verdict as a tag on the note (`influx:rejected:<profile>` or `influx:accepted:<profile>`), recorded as your operator identity, and removes the opposite verdict for that profile; nothing else about the note changes. A verdict the note already carries shows as a pressed button; click the other one to change it. After a click the page reloads with a banner confirming what was recorded. If the note changed while Lens was writing, Lens reads it again and retries once; if it changed again, or Lithos refused, Lens says so and states that nothing was changed. The buttons appear only once you have chosen an operator; without one, a verdict the note carries is shown as text.
+
+![](screenshots/knowledge-feedback.png)
+
+4. **Browse tags** opens `/knowledge/tags`, every tag in the knowledge base with how many notes carry it, most notes first. Type in **Filter tags** to narrow the list, or click a prefix such as `project:` or `source:` to show only the tags that start with it. Click a tag to list the notes carrying it.
 
 ![](screenshots/knowledge-tags.png)
 
@@ -151,6 +157,9 @@ Notes ingested from the web carry a link to the original:
 
 6. **Source** links to the article or page the note was made from. Only an ordinary web address is a link; any other value is shown as plain text.
 7. Some sites cannot be archived — Influx does not fetch some domains, some sites block it, and some links are not articles at all. For such a note the article body is missing, and Lens explains why under the source line: the reason Influx recorded, that Influx will not retry, and that the original is at the source link.
+8. A note Influx ingested for a profile shows a **👎** button for each of its profiles in its header, to mark it not interesting for that profile (see [Knowledge](#knowledge)); it shows pressed when the note already carries that verdict. A profile the note is already marked interesting for says **👍 interesting** beside its button.
+
+![](screenshots/note-feedback.png)
 
 ---
 
@@ -162,7 +171,7 @@ Notes in Lithos are connected by typed edges — `supports`, `refines`, `derived
 
 1. **Toolbar.** Drag **Min weight** to hide weak edges (the count hidden is shown beside it). Tick **Provenance** boxes to show inferred and declared edges. **Colour notes by** namespace or note type. Type in **Find** to locate a note by title.
 2. **Canvas and key.** Notes are circles sized by their connections in this view; archived notes are greyed. Edges are drawn by type, with arrowheads showing direction. The key under the canvas names the line styles and colours.
-3. **Node panel.** Click a note to select it. The panel shows its chips, its **Degree in this view**, **Centre on this** (to redraw the graph around it), and **Relations in this view** grouped by type. Click a related note's arrow to open the edge.
+3. **Node panel.** Click a note to select it. The panel shows its chips, a **👎** button for each profile an Influx note was ingested for (as on the note page), its **Degree in this view**, **Centre on this** (to redraw the graph around it), and **Relations in this view** grouped by type. Click a related note's arrow to open the edge.
 4. **Edge panel.** Selecting an edge shows its source and target, type, weight, namespace, provenance (with the inferring agent and its rationale for an inferred edge), and when it was created and updated.
 5. Below the canvas, **Legend** explains each edge type in the view, **Edges by type** lists every edge as text, and **Not shown** says how many edges the weight and provenance filters are hiding.
 

@@ -18,7 +18,7 @@
   link goes to the task, which re-renders from fresh reads.
 -#}
 
-{% block title %}The task changed | Lithos Lens{% endblock %}
+{% block title %}The {{ "note" if problem.action == "feedback" else "task" }} changed | Lithos Lens{% endblock %}
 
 {% block content %}
   {% include "writes/outcome.html" %}

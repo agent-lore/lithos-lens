@@ -1106,6 +1106,7 @@ Writes are attributed to a **named human operator**, distinct from the Lens serv
 | `GET /tasks/{task_id}/cancel` → `POST /tasks/{task_id}/cancel` | Consequence-aware cancel (confirm page + submit) |
 | `GET /tasks/new` → `POST /tasks/new` | Create task / epic / gate (`new` is a reserved task-path segment) |
 | `GET /tasks/{task_id}/edges/new` → `POST /tasks/{task_id}/edges` | Relation confirm step; add dependency edge |
+| `POST /note/{note_id}/feedback` | Relevance feedback on an Influx note: 👍 / 👎 for one of its profiles, a `lithos_note_update` tag patch (§10) |
 
 ---
 
@@ -1307,15 +1308,17 @@ The `tags` argument replaces the full list (that is why step 1 exists); `metadat
 
 | Entry point | Mechanism |
 |-------------|-----------|
-| Feed view | 👍 / 👎 buttons on each card |
+| Feed view (the `/knowledge` landing's Recent intake rows) | 👍 / 👎 buttons on each card |
 | Note view / graph panel | 👎 button |
 
+Buttons render only on a note carrying at least one `profile:<name>` tag, **one pair per profile** — a verdict is about one profile, so a note in several asks for each separately — and a verdict the note already carries renders pressed, so the operator sees it and can change it. With no operator identity (§5C.5) no button renders; a verdict the note carries is stated as text.
+
 ```
-POST /api/feedback
-{ "note_id": "<uuid>", "profile": "<profile>", "verdict": "accepted" | "rejected" }
+POST /note/{note_id}/feedback          (form-encoded)
+profile=<profile>&verdict=accepted|rejected&next=<page to return to>
 ```
 
-Response: `{"status": "ok"}` or `{"status": "error", "message": "..."}` — errors are shown in the UI, never swallowed. Profile-scoped views SHOULD exclude notes carrying `influx:rejected:<active-profile>` by default.
+*(Decided 2026-11-07, K4. Earlier versions sketched `POST /api/feedback` with a JSON body and a JSON `{"status": …}` answer; §5C.3 governs every write, so the endpoint is a form POST at the note's path like the task writes.)* It goes through the §5C write funnel — Origin check, operator (a POST with none is sent to the operator page and not replayed), registration, one audit line — with the note's `version` as the pre-check: the action reads the note (§10.2 step 1), sends the tag list with that version as `expected_version`, and on `version_conflict` re-reads and retries once. A note already carrying exactly the verdict asked for is written nothing. Success is a 303 to `next` with a receipt; a refusal, a second conflict or an unknown outcome is a page that says what changed — errors are shown in the UI, never swallowed. Profile-scoped views SHOULD exclude notes carrying `influx:rejected:<active-profile>` by default (not yet built).
 
 ---
 

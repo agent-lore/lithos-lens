@@ -1,0 +1,57 @@
+{#
+  Relevance feedback on an Influx note (K4, REQUIREMENTS §10): one row per
+  profile the note carries, each with its verdict buttons.
+
+  Context:
+    `feedback_note_id` -- the note's id;
+    `feedback_tags`    -- its tags as this page read them;
+    `feedback_verdicts` -- which buttons this surface offers: `feed_verdicts`
+                         (👍 and 👎, the Recent intake rows) or `note_verdicts`
+                         (👎 alone, the note page and the graph's node panel);
+    `feedback_next`    -- where the 303 returns the operator.
+
+  Nothing renders for a note with no `profile:<name>` tag. Feedback is
+  profile-scoped, so a note in several profiles gets one row each — a verdict
+  for one says nothing about the others. A verdict the note already carries
+  renders pressed (`aria-pressed`); clicking the other one changes it. A
+  carried verdict this surface offers no button for is stated as text. With no
+  operator identity there is no form (§5C.5) — the verdicts the note carries
+  are stated as text, and the chrome's chip offers the choice.
+-#}
+{% set feedback_rows = note_feedback(feedback_tags) %}
+{% if feedback_rows %}
+  {% set feedback_identity = operator_identity(request) %}
+  <div class="feedback-actions" data-feedback-note="{{ feedback_note_id }}">
+    {% for row in feedback_rows %}
+      {% if feedback_identity.resolved %}
+        <form class="feedback-action" method="post" action="{{ note_feedback_path(feedback_note_id) }}" data-feedback-profile="{{ row.profile }}">
+          <input type="hidden" name="profile" value="{{ row.profile }}">
+          <input type="hidden" name="next" value="{{ feedback_next }}">
+          <span class="feedback-profile">{{ row.profile }}</span>
+          {% for verdict in feedback_verdicts %}
+            {% set pressed = row.pressed(verdict) %}
+            <button type="submit" name="verdict" value="{{ verdict }}"
+                    class="feedback-button{% if pressed %} feedback-button-pressed{% endif %}"
+                    aria-pressed="{{ 'true' if pressed else 'false' }}"
+                    data-feedback-verdict="{{ verdict }}"
+                    title="{{ 'Interesting' if verdict == 'accepted' else 'Not interesting' }} for {{ row.profile }}"
+                    aria-label="{{ 'Interesting' if verdict == 'accepted' else 'Not interesting' }} for {{ row.profile }}">
+              {%- if verdict == "accepted" %}&#128077;{% else %}&#128078;{% endif -%}
+            </button>
+          {% endfor %}
+          {#- A verdict the note carries that this surface has no button for
+              (👍 on the note page and the graph panel) is stated beside it,
+              so a judged note never looks unjudged. -#}
+          {% if row.accepted and "accepted" not in feedback_verdicts %}<span class="feedback-verdict" data-feedback-carried="accepted">&#128077; interesting</span>{% endif %}
+          {% if row.rejected and "rejected" not in feedback_verdicts %}<span class="feedback-verdict" data-feedback-carried="rejected">&#128078; not interesting</span>{% endif %}
+        </form>
+      {% elif row.accepted or row.rejected %}
+        <p class="feedback-action" data-feedback-profile="{{ row.profile }}" data-feedback-readonly>
+          <span class="feedback-profile">{{ row.profile }}</span>
+          {% if row.accepted %}<span class="feedback-verdict" data-feedback-verdict="accepted">&#128077; interesting</span>{% endif %}
+          {% if row.rejected %}<span class="feedback-verdict" data-feedback-verdict="rejected">&#128078; not interesting</span>{% endif %}
+        </p>
+      {% endif %}
+    {% endfor %}
+  </div>
+{% endif %}

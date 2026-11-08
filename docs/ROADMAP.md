@@ -356,6 +356,11 @@ namespace filters. What K4 still holds:
   `influx:accepted:<profile>` / `influx:rejected:<profile>` tags via
   `lithos_note_update` (frontmatter patch — the old read-then-rewrite contract
   is obsolete). Task `dee3043f`. Influx reads only the rejected tag today.
+  **Shipped**: one button pair per profile the note carries, on the Recent
+  intake rows (👍 and 👎), the note page and the graph's node panel (👎),
+  through the write funnel as the operator (`POST /note/{id}/feedback`).
+  Still open here: hiding rejected notes from profile-scoped views (§10.3's
+  SHOULD).
 - **Cited-by panel** (§6.7) — "cited by findings in tasks X, Y" — **gated on
   upstream ask #9** (do not ship the O(all-tasks) scan workaround).
 - **Feed extras** (§9) the landing does not have: paging with "Showing N of

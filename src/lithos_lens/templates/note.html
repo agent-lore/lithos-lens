@@ -176,6 +176,10 @@
               {%- if note_meta.source_url %} Read the original at the source link.{% endif %}
             </p>
           {% endif %}
+          {#- 👎 for each profile the note was ingested for (K4, §10.3). -#}
+          {% with feedback_note_id = note.id, feedback_tags = note.tags, feedback_verdicts = note_verdicts, feedback_next = write_return_path(request) %}
+            {% include "writes/feedback_action.html" %}
+          {% endwith %}
         </header>
         {#- Unresolved contradictions from the edge-table snapshot (K2 D13),
             one line each; absent when the snapshot is unreadable or refused. -#}

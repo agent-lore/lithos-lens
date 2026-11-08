@@ -3262,6 +3262,50 @@ a.blocker-chip:focus-visible {
   margin: 0;
 }
 
+/* ── Relevance feedback (K4, §10) ───────────────────────────────────────
+   One quiet line per profile under a Recent intake row, in the note page's
+   header and in the graph's node panel: the profile's name, then its verdict
+   buttons. A verdict the note carries is pressed — filled, so it reads as the
+   current state rather than as another button. */
+.feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0.35rem 0 0;
+}
+
+.feedback-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.feedback-profile {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.feedback-button {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2rem 0.45rem;
+  width: auto;
+}
+
+.feedback-button-pressed {
+  background: var(--panel-strong);
+  border-color: var(--accent);
+}
+
+.feedback-verdict {
+  font-size: 0.8rem;
+}
+
 /* ── Operator identity (§5C.5) ─────────────────────────────────────────
    The chip sits in the page chrome on every page, so it is deliberately
    quiet: one line of text that either names who writes are recorded as or
