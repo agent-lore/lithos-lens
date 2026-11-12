@@ -26,6 +26,11 @@ event stream. The current implementation has:
   edge, and complete a gate by hand. Each shows its consequences on a
   confirmation page before anything is written and ends with a receipt. Lens
   has no authentication; it is built for one operator on a trusted network.
+- **Relevance feedback** on notes Influx ingested, also as the operator: 👍 /
+  👎 per profile on the Knowledge page's Recent intake rows, and 👎 on the
+  note page and the knowledge graph's node panel. One click writes one tag on
+  the note (`influx:accepted:<profile>` or `influx:rejected:<profile>`), with
+  no confirmation page, and ends with a receipt.
 
 Everything else is read-only, and reading never changes Lithos state. The
 user-facing walkthrough with screenshots is

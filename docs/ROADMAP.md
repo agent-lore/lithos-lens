@@ -101,8 +101,14 @@ How it works:
   Its neighbours join the picture beside it, nothing drawn moves, and the URL
   carries the expansions. The canvas can also fill the page.
 
-There is still no knowledge write, no salience and no centrality overlay. A
+K2 itself shipped no knowledge write, no salience and no centrality overlay. A
 refused expansion offers no weight remedy (deferred, 2026-10-10).
+
+**Since 0.6.0**, not yet in a numbered release: the first K4 slice, the
+**relevance feedback buttons** (PR #153, merged 2026-11-08). This is the first
+knowledge write: 👍 / 👎 per profile on an Influx-ingested note, one tag patch
+through the write funnel as the operator. See K4 below for what the milestone
+still holds.
 
 `docs/SPECIFICATION.md` describes this state precisely, and is the document to
 update when behavior changes.
@@ -132,7 +138,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | **shipped** | [k2-knowledge-graph-view.md](./prd/k2-knowledge-graph-view.md) | 0.6.0 |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
 | 7 | **X1** | Both | LLM finding-curation + desktop notifications | planned | — | — |
-| 8 | **K4** | Knowledge | Feedback buttons, cited-by panel, feed extras (the feed itself shipped in #124) | planned | — | — |
+| 8 | **K4** | Knowledge | Cited-by panel, feed extras, hiding rejected notes (the feed shipped in #124, the feedback buttons in #153) | part shipped | — | — |
 | 9+ | pool | Knowledge | Conflict-resolution UI, note comparison, reading paths | deferred | — | — |
 
 ### T1 — Graph-Native Operator View (read-only) — SHIPPED in 0.3.0
@@ -368,8 +374,8 @@ namespace filters. What K4 still holds:
 
 ### Deferred pool
 
-Conflict-resolution UI (`lithos_conflict_resolve` — the first knowledge
-write), note comparison, and reading paths. Requirements are preserved in
+Conflict-resolution UI (`lithos_conflict_resolve` — the second knowledge
+write, after K4's feedback), note comparison, and reading paths. Requirements are preserved in
 REQUIREMENTS Part C; they re-enter the sequence when the knowledge surface
 has users.
 
