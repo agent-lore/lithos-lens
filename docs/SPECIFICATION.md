@@ -1,8 +1,8 @@
 # Lithos Lens - Specification
 
 Version: 0.6.0  
-Date: 2026-10-12  
-Status: Aligned with Implementation (T1, K1, T2, T3 and K2 shipped)
+Date: 2026-11-12  
+Status: Aligned with Implementation (T1, K1, T2, T3 and K2 shipped; K4's feedback buttons shipped)
 
 ## 1. Purpose
 
@@ -242,6 +242,13 @@ The current application exposes these routes:
 - `GET /note/{knowledge_id}`
   Renders a note: server-side markdown, frontmatter metadata chips, the
   related panel, and provenance.
+- `POST /note/{note_id}/feedback`
+  Records the operator's relevance verdict on an Influx-ingested note for one
+  of its profiles, through the write funnel (§5.15, Feedback): the form posts
+  `profile`, `verdict` (`accepted` | `rejected`) and `next`, and the write is
+  one `lithos_note_update` tag patch as the operator. Answered like the
+  approve POST — 303 to `next` (same-origin relative, else the note's page)
+  with `?receipt=<id>` — and always a plain form, never HTMX.
 
 Every page that extends the base layout — the board, task detail, the graph,
 knowledge, a note, the operator page — accepts `?receipt=<id>` and renders that
@@ -1346,6 +1353,10 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   the graph reads the edge-table snapshot, not `lithos_related`
 - a **produced-by chip** when the note came from a task and that task reads
   back successfully
+- **relevance feedback** in the header, when the note carries a
+  `profile:<name>` tag: one row per profile, each with a 👎 button; a 👍 the
+  note already carries is stated as text beside it (§5.15, Feedback). A note
+  with no profile tag shows nothing
 - a **back link** naming where it returns to: with `?task=` (a finding's
   document link, `request_filters.note_url`), "Back to <task title>" — this
   takes priority; otherwise with a `next=` that passes `write_guards.safe_next`
@@ -1405,6 +1416,10 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   render chipless under a "Chips shown for the first N notes." line; a failed
   read leaves only its own row chipless, never the list. The number of reads
   is the landing span's `lens.chips.fanout`
+- **relevance feedback** on each **Recent intake** row whose note carries a
+  `profile:<name>` tag: one 👍 / 👎 pair per profile, a verdict the note
+  already carries rendered pressed (§5.15, Feedback). "Your notes" rows and
+  search result cards carry no buttons
 - a **"Browse tags"** link above the two sections to `/knowledge/tags`, beside
   it **"Browse the graph"** → `/knowledge/graph` (the scope picker) and the
   edge-table snapshot's unresolved-contradiction count ("2 unresolved
@@ -1743,7 +1758,9 @@ Knowledge graph full page).
 The **node panel**: the note's title linking to `/note/{id}` (a ghost its
 short id, "note not found" and its full id; an unread node its full id and
 "Facts not read for this view"), its K1 chips and lede from the facts
-(a `pending` node's last-known ones, marked "Facts pending a re-read"), its
+(a `pending` node's last-known ones, marked "Facts pending a re-read"), the
+👎 feedback row when its facts were read and its note carries a
+`profile:<name>` tag (§5.15, Feedback; the write returns to this panel), its
 degree in this view, **Centre on this** (`?focus=<id>`, depth and filters
 kept, the selection cleared), and its **relations in this view**: every
 drawn edge at the note — typed rows and the wiki-link and provenance pairs,
@@ -2913,9 +2930,10 @@ Three rules hold across every row:
   the absence of a claim: a 4xx would blame a request that was fine and a 5xx
   would say the action failed, which is the one thing it must not say.
 
-### 5.15 Write Funnel, Receipts, Complete a Gate, Reopen, Cancel, Create and Add a Dependency
+### 5.15 Write Funnel, Receipts, Complete a Gate, Reopen, Cancel, Create, Add a Dependency and Feedback
 
-The task writes (T3-W4 onwards). Every curated write goes through **one function**
+The task writes (T3-W4 onwards) and the one note write (K4's relevance
+feedback, last in this section). Every curated write goes through **one function**
 (`lithos_lens.write_funnel.WriteFunnel.submit`, or `submit_create` for a create,
 which has no task to pre-check — see Create below); route handlers parse their form
 and describe their action, and never call a Lithos write themselves. The steps,
@@ -3373,6 +3391,71 @@ and the relation is restated before anything is written.
 - **Record.** The span is `lens.writes.edge_upsert`; the audit arguments are
   `from_task_id`, `to_task_id` and `type`.
 
+**Feedback** (K4; REQUIREMENTS §10). The one write on a note: the operator's
+relevance verdict on a note Influx ingested, for one of its profiles. Such a
+note carries a `profile:<name>` tag per profile, and the verdict is a tag on
+the same note: `influx:accepted:<name>` (👍) or `influx:rejected:<name>` (👎).
+Influx reads the rejected tag today; nothing reads the accepted one yet, and
+Lens records it regardless.
+
+- **Where the buttons are.** One partial (`writes/feedback_action.html`)
+  renders one row per profile the note carries: 👍 and 👎 on the knowledge
+  landing's Recent intake rows, 👎 alone on the note page and the knowledge
+  graph's node panel (§5.7). A note with no `profile:<name>` tag gets no row,
+  and a bare `profile:` names no profile.
+- **What a row shows.** A verdict the note already carries renders pressed
+  (`aria-pressed="true"`). One the surface has no button for — 👍 on the note
+  page and the panel — is stated as text beside the button. A note tagged both
+  ways renders both pressed, and clicking either leaves exactly one. With no
+  operator identity there is no form: the verdicts the note carries are stated
+  as text, and the chrome's chip offers the choice (§5.13).
+- **The write.** `POST /note/{note_id}/feedback` with `profile`, `verdict`
+  and `next`; a plain form, never HTMX. A note has no status, so the funnel
+  runs steps 1, 2, 4 and 8–10 and the action's own pre-check stands in for
+  steps 3 and 5, keyed on the note's `version`:
+  1. `lithos_read(id, max_length=1)` for the note's tags and `version`.
+  2. The new tag list: every copy of the opposite verdict for that profile
+     dropped, the verdict's tag appended unless already present, and every
+     other tag carried through exactly as read — same string, same order,
+     duplicates included.
+  3. `lithos_note_update(id, agent=<operator>, tags=<the whole list>,
+     expected_version=<version>)`. `tags` replaces the note's list, which is
+     why the list is sent whole and only against the version it was read at.
+- **Lost to a concurrent change.** On `version_conflict` the action reads
+  again and retries **once**. A second conflict is the conflict page — "The
+  note kept changing while Lens was writing to it." (409) — with nothing
+  written.
+- **Nothing to change.** A note that already carries exactly the verdict asked
+  for, and not the opposite, gets no Lithos write; the receipt says "Already
+  marked" and "The note already carried this verdict, so nothing was written."
+- **Refusals.** A missing profile or a verdict that is not one of the two:
+  400, nothing read. A profile the note no longer carries: the conflict page,
+  "This note is no longer in profile *\<name\>*." (409). A note that is gone,
+  at the read or at the write: "This note no longer exists." (409). A failed
+  read, or a note whose `version` cannot be read: 503, "…so it didn't try the
+  write." Any other Lithos refusal is mapped by §5.14.
+- **Unknown outcome.** An error with no envelope may have applied the patch.
+  The page reads the note again and states what it shows now — "The note now
+  carries *\<tag\>*." or "The note does not carry *\<tag\>* now." — or that
+  the note could not be read either.
+- **Receipt.** "👍 Marked "*\<title\>*" interesting for profile *\<name\>*"
+  (or "👎 … not interesting …"), the title linking to the note, then "Recorded
+  as *\<operator\>*." — and, when the write landed on its retry, that the note
+  changed while Lens was writing and the verdict was applied to it as it is
+  now. The conflict, refusal and unknown-outcome pages name the note by its
+  title and offer "Open the note".
+- **Facts cache.** After a patch that applied, or a read that found the
+  verdict already there, the knowledge graph's note facts entry for the note
+  is marked stale, so a graph the redirect lands on reads its tags again
+  rather than waiting for `note.updated`.
+- **Record.** The span is `lens.writes.feedback`. The audit line's task id is
+  the note's id, its arguments are `note_id`, `profile` and `verdict`, and its
+  observed status is `version <n>`. `lens.write.unchanged` marks an attempt
+  that wrote nothing; `lens.write.retried` says whether an applied write was
+  the retry.
+- **Not built.** Hiding notes that carry `influx:rejected:<profile>` from
+  profile-scoped views (REQUIREMENTS §10.3, a SHOULD).
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -3396,6 +3479,10 @@ provides:
   receipt names, `lithos_task_cancel` (with an optional `reason`),
   `lithos_task_create`, and `lithos_task_edge_upsert`, which emits no event
   (§5.15)
+- **one note write**, attributed to the operator: `lithos_note_update` with
+  `tags` and `expected_version` — a frontmatter patch that never carries the
+  note body — whose `version_conflict` answer the feedback action retries on
+  (§5.15, Feedback)
 - id-prefix resolution in `lithos_task_get` (Lithos 0.5.0 and later), which
   the relation confirm step relies on to resolve the task the operator typed
 
@@ -3664,7 +3751,10 @@ The following requirement areas are not yet implemented in the current state:
   memory only: there is no lookup of `metadata.lens_request_id` in Lithos, so
   a restart forgets the request ids it had seen (§5.15, Create).
 - cognitive search (`lithos_retrieve`) and node stats (K3)
-- feed, feedback, and cited-by panel (K4)
+- the rest of K4. The feed (the landing's Recent intake section) and the
+  feedback buttons (§5.15, Feedback) ship. Not built: hiding rejected notes
+  from profile-scoped views, the cited-by panel, and the feed's paging,
+  date-range and `note_type` filters and row ledes
 - archive-backed file serving and in-browser document viewing
 - saved reading paths
 - LLM-assisted curation, summaries, or browsing assistance (X1) — the LLM
@@ -3703,7 +3793,10 @@ implemented in this repository. That covers:
   - the node and edge panels;
   - the note-page entry points;
   - expansion in place and the full-page canvas;
-  - the knowledge event scope and `/knowledge/events` (§5.8).
+  - the knowledge event scope and `/knowledge/events` (§5.8);
+- since 0.6.0, not yet in a numbered release: the first **K4** slice, the
+  relevance feedback buttons and `POST /note/{note_id}/feedback` (§5.1, §5.7,
+  §5.15).
 
 Two pieces of these milestones' contracts are not shipped (§10): removing a
 dependency edge (T3), and a refused expansion's weight remedy (K2).

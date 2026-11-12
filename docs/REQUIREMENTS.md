@@ -1324,7 +1324,7 @@ profile=<profile>&verdict=accepted|rejected&next=<page to return to>
 
 ## 11. Conflict Resolution UI
 
-*The first knowledge write (deferred pool — see ROADMAP); follows the §5C write-funnel and operator-identity contract.*
+*A knowledge write (deferred pool — see ROADMAP; feedback, §10, was the first); follows the §5C write-funnel and operator-identity contract.*
 
 When `contradicts` edges exist, Lens exposes a resolution panel on the relevant notes and on the edge in the graph view (§8.4):
 
@@ -1577,7 +1577,7 @@ Additional payload notes: task events carry empty `tags`, so upstream `?tags=` f
 | `GET /knowledge` | Search / your-notes-and-intake landing (`?q=`, `?tag=`, `?namespace=`, `?section=`) |
 | `GET /knowledge/resolve` | Wiki-link resolver (`?target=`, `?from=`) |
 | `GET /knowledge/graph` | Knowledge graph (`?focus=` for ego mode) |
-| `POST /api/feedback` | Feedback write (§10; write-gated) |
+| `POST /note/{note_id}/feedback` | Feedback write (§10.3; through the §5C write funnel) |
 | `POST /api/conflict/resolve` | Conflict resolution (§11; write-gated) |
 | `POST /api/tasks/findings/curate` | LLM findings curation (`llm.enabled` only) |
 | `GET /settings` | Read-only settings view |
